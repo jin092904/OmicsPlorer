@@ -102,10 +102,10 @@ async def test_insert_for_other_tenant_blocked(
             await set_tenant(conn, two_tenants.a_tid)
             with pytest.raises(DBAPIError) as exc:
                 await conn.execute(
-                    text("INSERT INTO users(id, tenant_id, clerk_id, email) "
-                         "VALUES (:uid, :tid, :cid, :email)"),
+                    text("INSERT INTO users(id, tenant_id, firebase_uid, email) "
+                         "VALUES (:uid, :tid, :fid, :email)"),
                     {"uid": uuid4(), "tid": two_tenants.b_tid,
-                     "cid": f"forge_{uuid4().hex[:6]}", "email": "forge@x"},
+                     "fid": f"forge_{uuid4().hex[:6]}", "email": "forge@x"},
                 )
             assert "row-level security" in str(exc.value).lower()
 

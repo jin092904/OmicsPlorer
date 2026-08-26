@@ -43,10 +43,10 @@ async def two_tenants(super_engine: AsyncEngine) -> AsyncIterator[TenantPair]:
                 {"id": pair.a_tid, "n": f"TenantA-{pair.a_tid.hex[:6]}"},
             )
             await conn.execute(
-                text("INSERT INTO users(id, tenant_id, clerk_id, email) "
-                     "VALUES (:uid, :tid, :cid, :email)"),
+                text("INSERT INTO users(id, tenant_id, firebase_uid, email) "
+                     "VALUES (:uid, :tid, :fid, :email)"),
                 {"uid": pair.a_uid, "tid": pair.a_tid,
-                 "cid": f"clerk_a_{pair.a_uid.hex[:6]}", "email": "a@test"},
+                 "fid": f"firebase_a_{pair.a_uid.hex[:6]}", "email": "a@test"},
             )
             await conn.execute(
                 text("INSERT INTO saved_queries(id, tenant_id, user_id, name, "
@@ -62,10 +62,10 @@ async def two_tenants(super_engine: AsyncEngine) -> AsyncIterator[TenantPair]:
                 {"id": pair.b_tid, "n": f"TenantB-{pair.b_tid.hex[:6]}"},
             )
             await conn.execute(
-                text("INSERT INTO users(id, tenant_id, clerk_id, email) "
-                     "VALUES (:uid, :tid, :cid, :email)"),
+                text("INSERT INTO users(id, tenant_id, firebase_uid, email) "
+                     "VALUES (:uid, :tid, :fid, :email)"),
                 {"uid": pair.b_uid, "tid": pair.b_tid,
-                 "cid": f"clerk_b_{pair.b_uid.hex[:6]}", "email": "b@test"},
+                 "fid": f"firebase_b_{pair.b_uid.hex[:6]}", "email": "b@test"},
             )
             await conn.execute(
                 text("INSERT INTO saved_queries(id, tenant_id, user_id, name, "
