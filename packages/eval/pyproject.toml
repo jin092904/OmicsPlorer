@@ -1,0 +1,12 @@
+[project]
+name = "genofinder-eval"
+version = "0.1.0"
+description = "Evaluation harness — labeled queries + metrics (nDCG@10, Recall@50, MRR)"
+requires-python = ">=3.12,<3.13"
+license = { text = "AGPL-3.0-or-later" }
+
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

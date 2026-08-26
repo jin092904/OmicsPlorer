@@ -1,0 +1,120 @@
+name: security-gates
+
+on:
+  pull_request:
+  push:
+    branches: [main, public-release]
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install uv
+      - name: Audit API environment
+        working-directory: apps/api
+        run: uv sync --frozen && uv run pip-audit --ignore-vuln PYSEC-2026-3447
+      - name: Audit worker environment
+        working-directory: apps/workers
+        run: uv sync --frozen && uv run pip-audit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: corepack enable
+      - name: Audit web dependencies
+        working-directory: apps/web
+        run: pnpm install --frozen-lockfile && pnpm audit --audit-level=critical
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  no-external-llm-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: returntocorp/semgrep-action@v1
+        with:
+          config: infra/lint/no-external-llm.yml
+
+  application-security-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install uv
+      - name: Install API dependencies
+        working-directory: apps/api
+        run: uv sync --frozen
+      - name: Run log-redaction tests
+        working-directory: apps/api
+        run: uv run pytest tests/security/test_redaction.py -v
+      - name: Install worker dependencies
+        working-directory: apps/workers
+        run: uv sync --frozen
+      - name: Run prompt-handling regression tests
+        working-directory: apps/workers
+        run: uv run pytest tests/test_prompt_injection.py -v -m "not integration"
+
+  cross-tenant:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-bookworm
+        env:
+          POSTGRES_DB: genofinder
+          POSTGRES_USER: genofinder
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}-postgres # pragma: allowlist secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U genofinder"
+          --health-interval 5s --health-timeout 3s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the non-superuser application role
+        env:
+          PGPASSWORD: ci-${{ github.run_id }}-postgres # pragma: allowlist secret
+        run: |
+          psql -h localhost -U genofinder -d genofinder <<'SQL'
+          CREATE ROLE genofinder_app LOGIN PASSWORD 'ci-${{ github.run_id }}-app'; -- pragma: allowlist secret
+          ALTER ROLE genofinder_app NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB;
+          GRANT CONNECT ON DATABASE genofinder TO genofinder_app;
+          GRANT USAGE ON SCHEMA public TO genofinder_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO genofinder_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT USAGE, SELECT ON SEQUENCES TO genofinder_app;
+          SQL
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install uv
+      - working-directory: apps/api
+        run: uv sync --frozen
+      - name: Apply migrations
+        working-directory: apps/api
+        env:
+          DATABASE_URL: postgresql+asyncpg://genofinder:ci-${{ github.run_id }}-postgres@localhost:5432/genofinder
+          ALEMBIC_DATABASE_URL: postgresql+asyncpg://genofinder:ci-${{ github.run_id }}-postgres@localhost:5432/genofinder
+        run: uv run alembic upgrade head
+      - name: Run cross-tenant tests as the application role
+        working-directory: apps/api
+        env:
+          DATABASE_URL: postgresql+asyncpg://genofinder_app:ci-${{ github.run_id }}-app@localhost:5432/genofinder
+          ALEMBIC_DATABASE_URL: postgresql+asyncpg://genofinder:ci-${{ github.run_id }}-postgres@localhost:5432/genofinder
+        run: uv run pytest tests/security/test_cross_tenant.py -v

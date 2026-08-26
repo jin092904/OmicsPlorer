@@ -1,0 +1,37 @@
+# Semgrep rule — ADR 0002 T2 / ADR 0003 강제.
+# 외부 LLM SDK 가 본 저장소에 도입되지 않도록 import 단계에서 차단.
+# OmicsPlorer v1 은 Ollama 로컬 LLM 만 사용한다.
+
+rules:
+  - id: no-external-llm-sdk
+    message: |
+      외부 LLM SDK import 가 감지됨. ADR 0002 T2 / ADR 0003 에 따라 v1 코드베이스에서는
+      외부 LLM (Anthropic / OpenAI / Google Generative / Cohere / Mistral SaaS) 호출이
+      금지된다. 로컬 Ollama (apps/workers/src/extractors/llm_client.py) 를 사용하라.
+
+      외부 LLM 통합이 필요한 경우 ADR 0003 의 "외부 vendor fallback 조건" 4개를 모두 만족한
+      뒤 새 ADR (0003 supersede) 을 머지하고 본 lint rule 을 갱신하라.
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: import anthropic
+      - pattern: from anthropic import ...
+      - pattern: import openai
+      - pattern: from openai import ...
+      - pattern: import google.generativeai
+      - pattern: from google.generativeai import ...
+      - pattern: import cohere
+      - pattern: from cohere import ...
+      - pattern: import mistralai
+      - pattern: from mistralai import ...
+
+  - id: no-query-in-exception
+    message: |
+      예외 메시지·인자에 사용자 쿼리(L3) 객체가 포함될 가능성이 있음. ADR 0002 T3 에 따라
+      예외 트레이스에 본문이 포함되면 안 된다 — 길이/해시만 노출하라.
+    severity: WARNING
+    languages: [python]
+    pattern-either:
+      - pattern: raise $E(query_text=$Q, ...)
+      - pattern: raise $E(query_json=$Q, ...)
+      - pattern: raise $E($Q, ...) where $Q is "query_text"

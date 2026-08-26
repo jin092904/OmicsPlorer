@@ -1,0 +1,103 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+build/
+dist/
+.venv/
+venv/
+
+# uv
+.uv/
+
+# Node
+node_modules/
+.next/
+out/
+.turbo/
+.pnpm-store/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Local writing-tool workspaces
+/_workspace/
+
+# OS
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Local data
+*.db
+*.sqlite
+*.sqlite3
+data/local/
+/apps/workers/data/ontology_labels.json
+qdrant_storage/
+opensearch_data/
+
+# A100 native-stack runtime data + binaries (per `scripts/a100-native-bootstrap.sh`).
+# 컨테이너 stack 대체로 호스트 직접 실행 → repo 루트에 data 디렉터리들이 생김.
+# repo-root 한정 (`/`-prefix) — apps/api/src/services 같은 코드 디렉터리와 충돌 회피.
+/pgdata/
+/pgdata-18/
+/redis-data/
+/qdrant-data/
+/opensearch-data/
+/opensearch-data-3.6/
+/kms-data/
+/ollama-models/
+/services/
+/dumps/
+/upgrade-backup-*/
+
+# Build artifacts
+*.tsbuildinfo
+.next/
+next-env.d.ts
+
+# Firebase Admin SDK service account keys
+*firebase-adminsdk*.json
+*-adminsdk-*.json
+
+# DB/Qdrant/OpenSearch snapshots (multi-GB — never commit)
+snapshots/
+*.dump
+*.snapshot
+opensearch-data*.tar.gz
+
+# runtime markers
+.qdrant-initialized
+
+# prod 빌드 격리 디렉토리(c방식 두 포트)
+.next-prod/
+/.container-validation/
+
+# Blind relevance pools: randomization keys/salts remain local until the
+# annotation and adjudication set is frozen.
+*.restricted.csv
+*.restricted.json

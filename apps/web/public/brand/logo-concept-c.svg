@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="250" height="56" viewBox="0 0 250 56" fill="none" role="img" aria-label="OmicsPlorer">
+  <!-- Concept C — Omics layers + lens: 다중오믹스 층(track) 위를 탐색. -->
+  <g transform="translate(8,9)">
+    <rect x="0" y="2"  width="30" height="6" rx="3" fill="#1c1917"/>
+    <rect x="0" y="14" width="22" height="6" rx="3" fill="#9a948c"/>
+    <rect x="0" y="26" width="34" height="6" rx="3" fill="#1c1917"/>
+    <!-- 돋보기 -->
+    <g stroke="#0f7d6e" stroke-width="3" stroke-linecap="round" fill="#ffffff">
+      <circle cx="28" cy="24" r="8"/>
+    </g>
+    <line x1="33.7" y1="29.7" x2="40" y2="36" stroke="#0f7d6e" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <text x="60" y="36" font-family="'Pretendard','Helvetica Neue',Arial,sans-serif" font-size="27" font-weight="700" letter-spacing="-0.4" fill="#1c1917">Omics<tspan fill="#0f7d6e">Plorer</tspan></text>
+</svg>

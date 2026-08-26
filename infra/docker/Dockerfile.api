@@ -1,0 +1,62 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+#
+# ADR 0002 T9: non-root + 최소 base.
+# v0 는 python:3.12-slim 사용 (distroless python3-debian12 는 python 3.11 이라
+# 우리 venv (3.12) 와 ABI 불일치). prod 전환은 별도 ADR 에서 chainguard / distroless 3.12 검토.
+
+# ---- builder ----
+ARG PYTHON_IMAGE=python:3.12.11-slim-bookworm@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7
+FROM ${PYTHON_IMAGE} AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    UV_LINK_MODE=copy
+
+RUN pip install --no-cache-dir uv==0.11.14
+
+WORKDIR /build
+
+# 의존성 layer 캐시
+COPY apps/api/pyproject.toml apps/api/uv.lock ./
+RUN uv sync --frozen --no-install-project --no-dev
+
+COPY apps/api/src ./src
+COPY apps/api/alembic ./alembic
+COPY apps/api/alembic.ini ./alembic.ini
+COPY apps/api/README.md ./README.md
+
+RUN uv sync --frozen --no-dev
+
+# ---- runtime ----
+FROM ${PYTHON_IMAGE} AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/app/.venv/bin:${PATH}"
+
+# non-root user (UID 1001)
+RUN apt-get -o APT::Sandbox::User=root update \
+    && apt-get -o APT::Sandbox::User=root install --no-install-recommends -y ca-certificates libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --no-create-home --shell /usr/sbin/nologin --uid 1001 app
+
+WORKDIR /app
+
+# Runtime code is immutable and world-readable; ownership stays root while the
+# process itself runs as UID 1001. This also works in single-map rootless builds.
+COPY --from=builder /build/.venv /app/.venv
+COPY --from=builder /build/src /app/src
+COPY --from=builder /build/alembic /app/alembic
+COPY --from=builder /build/alembic.ini /app/alembic.ini
+
+USER app
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=12 \
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=2).read()"]
+
+# uv-generated console scripts retain the builder venv's absolute shebang
+# (/build/.venv). Module execution remains valid after copying to /app/.venv.
+ENTRYPOINT ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

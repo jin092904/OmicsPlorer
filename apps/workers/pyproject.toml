@@ -1,0 +1,64 @@
+[project]
+name = "omicsplorer-workers"
+version = "0.1.0"
+description = "OmicsPlorer — Celery harvesters / extractors / indexers"
+requires-python = ">=3.12,<3.13"
+license = { text = "AGPL-3.0-or-later" }
+
+dependencies = [
+    # 검증 완료 (docs/external-apis.md §9)
+    "pysradb==2.5.1",
+    "oaklib==0.6.23",
+    "qdrant-client==1.17.1",
+    "opensearch-py==3.2.0",
+    # uv add 로 추가됨 — 정확한 핀은 uv.lock 에서 보장
+    "celery[redis]>=5.6.3",
+    "structlog>=25.5.0",
+    "httpx>=0.28.1",
+    "pydantic>=2",
+    "pydantic-settings>=2.14.0",
+    "sqlalchemy[asyncio]>=2",
+    "asyncpg>=0.31.0",
+    "redis>=6.4.0",
+    # ADR 0003: Ollama 호출은 httpx 로 직접 (ollama python pkg 미도입 — async 일관성·의존성 최소화)
+    "aiohttp>=3.13.5",
+    "tenacity>=9.1.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    # TODO(verify)
+    # "pytest", "pytest-asyncio", "ruff", "mypy",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# Publication baseline shared with the API package.
+select = ["E4", "E7", "E9", "F", "I"]
+per-file-ignores = { "scripts/**" = ["E402"] }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "integration: live external services (NCBI, postgres) required",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.20.2",
+    "pip-audit>=2.10.0",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "ruff>=0.15.12",
+]

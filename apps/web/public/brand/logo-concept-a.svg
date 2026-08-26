@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="248" height="56" viewBox="0 0 248 56" fill="none" role="img" aria-label="OmicsPlorer">
+  <!-- Concept A — Lens-O: 돋보기 렌즈(=탐색) 안에 데이터 점(=omics). 학술·차분. -->
+  <g transform="translate(8,8)" stroke="#0f7d6e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <circle cx="17" cy="17" r="13"/>
+    <line x1="26.5" y1="26.5" x2="38" y2="38"/>
+  </g>
+  <g fill="#0f7d6e" stroke="none">
+    <circle cx="20" cy="22" r="2.3"/>
+    <circle cx="27" cy="20" r="2.3"/>
+    <circle cx="24" cy="28" r="2.3"/>
+  </g>
+  <text x="62" y="36" font-family="'Pretendard','Helvetica Neue',Arial,sans-serif" font-size="27" font-weight="700" letter-spacing="-0.4" fill="#1c1917">Omics<tspan fill="#0f7d6e">Plorer</tspan></text>
+</svg>

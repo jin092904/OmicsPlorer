@@ -1,0 +1,287 @@
+name: omicsplorer
+
+x-database-env: &database-env
+  DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-genofinder_app}:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in infra/compose/.env}@postgres:5432/${POSTGRES_DB:-genofinder}
+  ALEMBIC_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-genofinder}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in infra/compose/.env}@postgres:5432/${POSTGRES_DB:-genofinder}
+
+x-service-env: &service-env
+  <<: *database-env
+  REDIS_URL: redis://redis:6379/0
+  QDRANT_URL: http://qdrant:6333
+  OPENSEARCH_URL: http://opensearch:9200
+  OLLAMA_URL: http://ollama-embed:11434
+  AIPICK_OLLAMA_URL: http://ollama-embed:11434
+  OLLAMA_MODEL_EMBED: ${OLLAMA_MODEL_EMBED:-qwen3-embedding:8b}
+  OLLAMA_MODEL_EXTRACTION: ${OLLAMA_MODEL_EXTRACTION:-gemma4:31b}
+  OLLAMA_MODEL_AIPICK: ${OLLAMA_MODEL_AIPICK:-gemma4:31b}
+  AI_PICK_ENABLED: ${AI_PICK_ENABLED:-0}
+
+services:
+  postgres:
+    image: postgres:18-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-genofinder}
+      POSTGRES_USER: ${POSTGRES_USER:-genofinder}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in infra/compose/.env}
+      APP_DB_USER: ${APP_DB_USER:-genofinder_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in infra/compose/.env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/01-app-role.sh:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.1@sha256:d774e7bb65744454984c6021637a0da89271f30df15e48601a9fafc926d26b1f
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  opensearch:
+    image: opensearchproject/opensearch:3.6.0@sha256:b5dd1512af2a99748c942cfbbd7f32162623336b210667d0fc6333c6321f171d
+    environment:
+      discovery.type: single-node
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: ${OPENSEARCH_JAVA_OPTS:--Xms1g -Xmx1g}
+    ulimits:
+      memlock: {soft: -1, hard: -1}
+      nofile: {soft: 65536, hard: 65536}
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    ports:
+      - "127.0.0.1:${OPENSEARCH_PORT:-9200}:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9200/_cluster/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  ollama-embed:
+    image: ollama/ollama:0.23.3@sha256:9b519ed11930ba9a3c6123f8546b8f553e247ea6ce58739a4878f913996e7a67
+    environment:
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-24h}
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-2}
+    volumes:
+      - ollama_models:/root/.ollama
+    ports:
+      - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  migrate:
+    image: omicsplorer-api:${OMICSPLORER_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.api
+    environment: *database-env
+    depends_on:
+      postgres: {condition: service_healthy}
+    entrypoint: ["alembic"]
+    command: ["upgrade", "head"]
+    restart: "no"
+
+  api:
+    image: omicsplorer-api:${OMICSPLORER_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.api
+    environment:
+      <<: *service-env
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      RERANKER_TOP_N: ${RERANKER_TOP_N:-20}
+      RERANKER_MODEL: ${RERANKER_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+      qdrant: {condition: service_healthy}
+      opensearch: {condition: service_healthy}
+      ollama-embed: {condition: service_healthy}
+    ports:
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-8000}:8000"
+    restart: unless-stopped
+
+  web:
+    image: omicsplorer-web:${OMICSPLORER_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.web
+      args:
+        NEXT_PUBLIC_FIREBASE_API_KEY: ${NEXT_PUBLIC_FIREBASE_API_KEY:-}
+        NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN:-}
+        NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${NEXT_PUBLIC_FIREBASE_PROJECT_ID:-}
+        NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: ${NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET:-}
+        NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID:-}
+        NEXT_PUBLIC_FIREBASE_APP_ID: ${NEXT_PUBLIC_FIREBASE_APP_ID:-}
+    environment:
+      API_BASE_URL: http://api:8000
+      NEXT_PUBLIC_API_URL: /backend
+    depends_on:
+      api: {condition: service_healthy}
+    ports:
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3000}:3000"
+    restart: unless-stopped
+
+  workers:
+    image: omicsplorer-workers:${OMICSPLORER_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.workers
+    profiles: ["ingest"]
+    environment:
+      <<: *service-env
+      NCBI_API_KEY: ${NCBI_API_KEY:-}
+      NCBI_EUTILS_API_KEY: ${NCBI_EUTILS_API_KEY:-}
+      SOL4_AUTO_COMMIT: "0"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+      qdrant: {condition: service_healthy}
+      opensearch: {condition: service_healthy}
+      ollama-embed: {condition: service_healthy}
+    volumes:
+      - sol4_logs:/app/logs
+    command: ["-A", "src.celery_app", "worker", "--loglevel=INFO", "--concurrency=1"]
+    restart: unless-stopped
+
+  beat:
+    image: omicsplorer-workers:${OMICSPLORER_IMAGE_TAG:-local}
+    profiles: ["ingest"]
+    environment:
+      <<: *service-env
+      NCBI_API_KEY: ${NCBI_API_KEY:-}
+      NCBI_EUTILS_API_KEY: ${NCBI_EUTILS_API_KEY:-}
+      SOL4_AUTO_COMMIT: "0"
+    depends_on:
+      workers: {condition: service_started}
+    command: ["-A", "src.celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    restart: unless-stopped
+
+  demo-seed:
+    image: postgres:18-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296
+    profiles: ["demo"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:-genofinder}
+      PGUSER: ${POSTGRES_USER:-genofinder}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in infra/compose/.env}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    volumes:
+      - ./demo-seed.sql:/seed/demo-seed.sql:ro
+    entrypoint: ["psql"]
+    command: ["--set", "ON_ERROR_STOP=1", "--file", "/seed/demo-seed.sql"]
+    restart: "no"
+
+  demo-index:
+    image: omicsplorer-workers:${OMICSPLORER_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.workers
+    profiles: ["demo"]
+    environment: *service-env
+    depends_on:
+      demo-seed: {condition: service_completed_successfully}
+      opensearch: {condition: service_healthy}
+    entrypoint: ["python"]
+    command: ["scripts/reindex_lexical.py"]
+    restart: "no"
+
+  model-pull-embed:
+    image: ollama/ollama:0.23.3@sha256:9b519ed11930ba9a3c6123f8546b8f553e247ea6ce58739a4878f913996e7a67
+    profiles: ["models"]
+    environment:
+      OLLAMA_HOST: http://ollama-embed:11434
+    depends_on:
+      ollama-embed: {condition: service_healthy}
+    entrypoint: ["ollama"]
+    command: ["pull", "${OLLAMA_MODEL_EMBED:-qwen3-embedding:8b}"]
+    restart: "no"
+
+  reindex-all:
+    image: omicsplorer-workers:${OMICSPLORER_IMAGE_TAG:-local}
+    profiles: ["maintenance"]
+    environment: *service-env
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      qdrant: {condition: service_healthy}
+      opensearch: {condition: service_healthy}
+      ollama-embed: {condition: service_healthy}
+    entrypoint: ["python"]
+    command: ["scripts/reindex_all.py"]
+    restart: "no"
+
+  sol4-shadow:
+    image: omicsplorer-workers:${OMICSPLORER_IMAGE_TAG:-local}
+    profiles: ["maintenance"]
+    environment:
+      <<: *service-env
+      SOL4_LOG_DIR: /app/logs
+      SOL4_AUTO_COMMIT: "0"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      ollama-embed: {condition: service_healthy}
+    volumes:
+      - sol4_logs:/app/logs
+      - maintenance_results:/app/results
+    entrypoint: ["python"]
+    command: ["scripts/backfill_tissue_extraction.py", "--auto-mode", "--daily-cap", "${SOL4_AUTO_DAILY_CAP:-100}", "--metrics-jsonl", "/app/results/sol4-shadow.jsonl"]
+    restart: "no"
+
+  sol4-commit:
+    image: omicsplorer-workers:${OMICSPLORER_IMAGE_TAG:-local}
+    profiles: ["sol4-commit"]
+    environment:
+      <<: *service-env
+      SOL4_LOG_DIR: /app/logs
+      SOL4_AUTO_COMMIT: "1"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      ollama-embed: {condition: service_healthy}
+    volumes:
+      - sol4_logs:/app/logs
+      - maintenance_results:/app/results
+    entrypoint: ["python"]
+    command: ["scripts/backfill_tissue_extraction.py", "--auto-mode", "--commit", "--daily-cap", "${SOL4_AUTO_DAILY_CAP:-100}", "--metrics-jsonl", "/app/results/sol4-commit.jsonl"]
+    restart: "no"
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  opensearch_data:
+  ollama_models:
+  sol4_logs:
+  maintenance_results:

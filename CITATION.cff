@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use OmicsPlorer in research, please cite the software and the associated article when available."
+title: "OmicsPlorer"
+type: software
+authors:
+  - family-names: "Lee"
+    given-names: "Hojin"
+version: 0.1.0-pre
+date-released: 2026-08-26
+url: "https://github.com/jin092904/OmicsPlorer"
+repository-code: "https://github.com/jin092904/OmicsPlorer"
+license: AGPL-3.0-or-later

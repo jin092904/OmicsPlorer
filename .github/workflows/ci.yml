@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main, public-release]
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install uv
+      - working-directory: apps/api
+        run: uv sync --frozen
+      - working-directory: apps/api
+        run: uv run ruff check .
+      - working-directory: apps/api
+        run: uv run pytest
+
+  workers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install uv
+      - working-directory: apps/workers
+        run: uv sync --frozen
+      - working-directory: apps/workers
+        run: uv run ruff check .
+      - working-directory: apps/workers
+        run: uv run pytest -m "not integration"
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: corepack enable
+      - working-directory: apps/web
+        run: pnpm install --frozen-lockfile
+      - working-directory: apps/web
+        run: pnpm lint
+      - working-directory: apps/web
+        run: pnpm typecheck
+      - working-directory: apps/web
+        run: pnpm build
