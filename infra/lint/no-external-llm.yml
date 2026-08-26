@@ -15,15 +15,15 @@ rules:
     languages: [python]
     pattern-either:
       - pattern: import anthropic
-      - pattern: from anthropic import ...
+      - pattern: from anthropic import $SYMBOL
       - pattern: import openai
-      - pattern: from openai import ...
+      - pattern: from openai import $SYMBOL
       - pattern: import google.generativeai
-      - pattern: from google.generativeai import ...
+      - pattern: from google.generativeai import $SYMBOL
       - pattern: import cohere
-      - pattern: from cohere import ...
+      - pattern: from cohere import $SYMBOL
       - pattern: import mistralai
-      - pattern: from mistralai import ...
+      - pattern: from mistralai import $SYMBOL
 
   - id: no-query-in-exception
     message: |
@@ -34,4 +34,5 @@ rules:
     pattern-either:
       - pattern: raise $E(query_text=$Q, ...)
       - pattern: raise $E(query_json=$Q, ...)
-      - pattern: raise $E($Q, ...) where $Q is "query_text"
+      - pattern: raise $E(query_text, ...)
+      - pattern: raise $E(query_json, ...)

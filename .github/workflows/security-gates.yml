@@ -3,7 +3,7 @@ name: security-gates
 on:
   pull_request:
   push:
-    branches: [main, public-release]
+    branches: [main]
 
 permissions:
   contents: read
