@@ -26,6 +26,7 @@ from src.indexer.geo import (
     _parse_pdat,
     index_geo_record,
 )
+from src.lineage import BUILD_STAGE_SOURCE_STUB, GEO_STUB_LINEAGE_ID
 
 # asyncio_mode=auto 가 async 테스트만 자동 마킹 — pytestmark 불필요.
 
@@ -77,6 +78,8 @@ def test_extract_from_payload_minimal() -> None:
     assert out["submission_date"] == date(2026, 1, 15)
     assert out["last_update"] == date(2026, 1, 15)
     assert out["extraction_version"] == EXTRACTION_VERSION
+    assert out["extraction_lineage_id"] == GEO_STUB_LINEAGE_ID
+    assert out["build_stage"] == BUILD_STAGE_SOURCE_STUB
     assert out["raw_metadata"] is payload  # 원본 보존 (참조 동일)
 
 
@@ -153,12 +156,15 @@ async def test_geo_pipeline_end_to_end_idempotent(db_engine) -> None:
         assert result.scalar() == 1
 
         result = await conn.execute(
-            text("SELECT extraction_version, raw_metadata IS NOT NULL "
+            text("SELECT extraction_version, extraction_lineage_id, build_stage, "
+                 "raw_metadata IS NOT NULL "
                  "FROM datasets WHERE source_db='GEO' AND source_id=:a"),
             {"a": accession},
         )
-        ver, has_raw = result.fetchone()
+        ver, lineage_id, build_stage, has_raw = result.fetchone()
         assert ver == EXTRACTION_VERSION
+        assert lineage_id == GEO_STUB_LINEAGE_ID
+        assert build_stage == BUILD_STAGE_SOURCE_STUB
         assert has_raw
 
     # 사후 정리

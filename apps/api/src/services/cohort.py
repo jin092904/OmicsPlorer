@@ -26,6 +26,12 @@ import redis.asyncio as redis_async
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from src.lineage import (
+    BUILD_STAGE_MODEL_ENRICHED,
+    composite_lineage_id,
+    configured_lineage_id,
+)
+
 logger = logging.getLogger(__name__)
 
 CACHE_TTL_HIT = 3600
@@ -115,14 +121,33 @@ async def save_cohort_design(
     eng = get_db_engine()
     async with eng.connect() as conn:
         async with conn.begin():
+            current = await conn.execute(
+                text(
+                    "SELECT extraction_lineage_id FROM datasets "
+                    "WHERE id = :id FOR UPDATE"
+                ),
+                {"id": dataset_id},
+            )
+            parent_lineage_id = current.scalar_one_or_none()
+            stage_lineage_id = configured_lineage_id("COHORT_EXTRACTION_LINEAGE_ID")
             await conn.execute(
                 text("""
                     UPDATE datasets
                        SET cohort_design = CAST(:d AS jsonb),
-                           cohort_design_version = :v
+                           cohort_design_version = :v,
+                           extraction_lineage_id = :lineage,
+                           build_stage = :build_stage
                      WHERE id = :id
                 """),
-                {"d": json.dumps(design), "v": version, "id": dataset_id},
+                {
+                    "d": json.dumps(design),
+                    "v": version,
+                    "lineage": composite_lineage_id(
+                        stage_lineage_id, parent_lineage_id
+                    ),
+                    "build_stage": BUILD_STAGE_MODEL_ENRICHED,
+                    "id": dataset_id,
+                },
             )
     await invalidate_cohort_cache(dataset_id)
 

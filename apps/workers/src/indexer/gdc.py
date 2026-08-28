@@ -12,6 +12,13 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from src.lineage import (
+    BUILD_STAGE_ONTOLOGY_NORMALIZED,
+    BUILD_STAGE_SOURCE_STRUCTURED,
+    GDC_SOURCE_LINEAGE_ID,
+    composite_lineage_id,
+    configured_lineage_id,
+)
 from src.ontology.mapper import OntologyMapper, lookup_many
 
 logger = logging.getLogger(__name__)
@@ -137,6 +144,15 @@ async def index_gdc_record(
     fields["disease_ids"] = disease_ids
     fields["tissue_ids"] = tissue_ids
     fields.setdefault("cell_type_ids", [])
+    if mapper is None:
+        fields["extraction_lineage_id"] = GDC_SOURCE_LINEAGE_ID
+        fields["build_stage"] = BUILD_STAGE_SOURCE_STRUCTURED
+    else:
+        fields["extraction_lineage_id"] = composite_lineage_id(
+            configured_lineage_id("ONTOLOGY_MAPPING_LINEAGE_ID"),
+            GDC_SOURCE_LINEAGE_ID,
+        )
+        fields["build_stage"] = BUILD_STAGE_ONTOLOGY_NORMALIZED
 
     raw_metadata_json = json.dumps(fields["raw_metadata"])
     fields_for_sql = {**fields, "raw_metadata": raw_metadata_json}
@@ -148,14 +164,14 @@ async def index_gdc_record(
             n_samples, access_type, has_processed_data, has_raw_data,
             metadata_completeness, platform, library_strategy,
             submission_date, last_update,
-            raw_metadata, extraction_version
+            raw_metadata, extraction_version, extraction_lineage_id, build_stage
         ) VALUES (
             :source_db, :source_id, :title, :abstract,
             :modality, :organism_taxid, :disease_ids, :tissue_ids, :cell_type_ids,
             :n_samples, :access_type, :has_processed_data, :has_raw_data,
             :metadata_completeness, :platform, :library_strategy,
             :submission_date, :last_update,
-            CAST(:raw_metadata AS jsonb), :extraction_version
+            CAST(:raw_metadata AS jsonb), :extraction_version, :extraction_lineage_id, :build_stage
         )
         ON CONFLICT ON CONSTRAINT uq_datasets_source DO UPDATE SET
             title                  = EXCLUDED.title,
@@ -170,6 +186,8 @@ async def index_gdc_record(
             library_strategy       = EXCLUDED.library_strategy,
             raw_metadata           = EXCLUDED.raw_metadata,
             extraction_version     = EXCLUDED.extraction_version,
+            extraction_lineage_id  = EXCLUDED.extraction_lineage_id,
+            build_stage            = EXCLUDED.build_stage,
             updated_at             = NOW()
         RETURNING source_id
     """)

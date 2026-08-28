@@ -62,7 +62,9 @@ SELECT count(*) FROM datasets
 UPDATE_SQL = """
 UPDATE datasets
    SET modality = modality || ARRAY(
-         SELECT m FROM unnest($2::text[]) m WHERE m <> ALL(modality))
+         SELECT m FROM unnest($2::text[]) m WHERE m <> ALL(modality)),
+       extraction_lineage_id = NULL,
+       build_stage = NULL
  WHERE $1 = ANY(modality)
    AND EXISTS (SELECT 1 FROM unnest($2::text[]) m WHERE m <> ALL(modality))
 RETURNING id

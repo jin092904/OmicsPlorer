@@ -152,7 +152,11 @@ async def run(*, commit: bool) -> dict[str, Any]:
 
         async with pg.transaction():
             for ch in changes:
-                await pg.execute("UPDATE datasets SET modality = $2 WHERE id = $1::uuid", ch["id"], ch["new"])
+                await pg.execute(
+                    "UPDATE datasets SET modality = $2, extraction_lineage_id = NULL, "
+                    "build_stage = NULL WHERE id = $1::uuid",
+                    ch["id"], ch["new"],
+                )
         changed_ids = [ch["id"] for ch in changes]
         log.info("applied: %d건 (changelog: %s)", len(changed_ids), CHANGELOG)
 

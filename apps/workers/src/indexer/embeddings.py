@@ -108,6 +108,9 @@ def _payload(dataset_row: dict[str, Any]) -> dict[str, Any]:
         ),
         "n_samples": dataset_row.get("n_samples"),
         "n_subjects": dataset_row.get("n_subjects"),
+        "extraction_version": dataset_row.get("extraction_version"),
+        "extraction_lineage_id": dataset_row.get("extraction_lineage_id"),
+        "build_stage": dataset_row.get("build_stage"),
     }
 
 

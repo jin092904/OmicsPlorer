@@ -175,7 +175,8 @@ async def step2_fetch_and_update(
 
             if updates:
                 await conn.executemany(
-                    "UPDATE datasets SET abstract = $2 WHERE id = $1",
+                    "UPDATE datasets SET abstract = $2, extraction_lineage_id = NULL, "
+                    "build_stage = NULL WHERE id = $1",
                     updates,
                 )
                 augmented_count += len(updates)

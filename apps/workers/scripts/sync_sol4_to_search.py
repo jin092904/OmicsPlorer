@@ -62,7 +62,8 @@ SELECT_SQL = """
 SELECT id, source_db, source_id, title, abstract, modality, organism_taxid,
        disease_ids, tissue_ids, cell_type_ids,
        access_type, has_processed_data, submission_date,
-       n_samples, n_subjects, platform, library_strategy, extraction_version
+       n_samples, n_subjects, platform, library_strategy, extraction_version,
+       extraction_lineage_id, build_stage
   FROM datasets
  WHERE extraction_version = :ver
  ORDER BY submission_date DESC NULLS LAST

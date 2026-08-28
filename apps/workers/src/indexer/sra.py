@@ -20,6 +20,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from src.lineage import BUILD_STAGE_SOURCE_STUB, SRA_STUB_LINEAGE_ID
+
 EXTRACTION_VERSION = "v0-sra-stub-2026-05-06"
 SOURCE_DB = "SRA"
 
@@ -127,6 +129,8 @@ def _extract_from_payload(payload: dict[str, Any], uid: str) -> dict[str, Any]:
         "last_update": _parse_date(rec.get("updatedate")),
         "raw_metadata": payload,
         "extraction_version": EXTRACTION_VERSION,
+        "extraction_lineage_id": SRA_STUB_LINEAGE_ID,
+        "build_stage": BUILD_STAGE_SOURCE_STUB,
     }
 
 
@@ -151,14 +155,14 @@ async def index_sra_record(conn: AsyncConnection, payload: dict[str, Any], uid: 
             n_samples, access_type, has_processed_data, has_raw_data,
             metadata_completeness, platform, library_strategy,
             submission_date, last_update,
-            raw_metadata, extraction_version
+            raw_metadata, extraction_version, extraction_lineage_id, build_stage
         ) VALUES (
             :source_db, :source_id, :title, :abstract,
             :organism_taxid,
             :n_samples, :access_type, :has_processed_data, :has_raw_data,
             :metadata_completeness, :platform, :library_strategy,
             :submission_date, :last_update,
-            CAST(:raw_metadata AS jsonb), :extraction_version
+            CAST(:raw_metadata AS jsonb), :extraction_version, :extraction_lineage_id, :build_stage
         )
         -- 마찬가지: extraction_version / modality 는 LLM 영역이라 harvester 가 덮어쓰지 않는다.
         -- organism_taxid 는 SRA esummary 의 expxml 에서 직접 추출하므로 harvest fresh 데이터 — 갱신 OK.

@@ -23,6 +23,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from src.lineage import BUILD_STAGE_SOURCE_STUB, GEO_STUB_LINEAGE_ID
+
 EXTRACTION_VERSION = "v0-stub-2026-05-06"
 SOURCE_DB = "GEO"
 
@@ -96,6 +98,8 @@ def _extract_from_payload(payload: dict[str, Any], uid: str) -> dict[str, Any]:
         "last_update": pdat,
         "raw_metadata": payload,  # 원본 보존 (§5.5 멱등 재추출)
         "extraction_version": EXTRACTION_VERSION,
+        "extraction_lineage_id": GEO_STUB_LINEAGE_ID,
+        "build_stage": BUILD_STAGE_SOURCE_STUB,
     }
 
 
@@ -115,13 +119,13 @@ async def index_geo_record(conn: AsyncConnection, payload: dict[str, Any], uid: 
             n_samples, access_type, has_processed_data, has_raw_data,
             metadata_completeness, platform, library_strategy,
             submission_date, last_update,
-            raw_metadata, extraction_version
+            raw_metadata, extraction_version, extraction_lineage_id, build_stage
         ) VALUES (
             :source_db, :source_id, :title, :abstract,
             :n_samples, :access_type, :has_processed_data, :has_raw_data,
             :metadata_completeness, :platform, :library_strategy,
             :submission_date, :last_update,
-            CAST(:raw_metadata AS jsonb), :extraction_version
+            CAST(:raw_metadata AS jsonb), :extraction_version, :extraction_lineage_id, :build_stage
         )
         -- ON CONFLICT 는 harvest layer 의 fresh fields 만 갱신.
         -- modality / organism_taxid / disease_ids / extraction_version 은 LLM extractor 가 관리하므로
