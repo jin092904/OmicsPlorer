@@ -109,7 +109,9 @@ services:
     environment: *database-env
     depends_on:
       postgres: {condition: service_healthy}
-    entrypoint: ["alembic"]
+    # uv console scripts retain the builder venv shebang after the venv is copied.
+    # Module execution resolves the runtime interpreter from PATH instead.
+    entrypoint: ["python", "-m", "alembic"]
     command: ["upgrade", "head"]
     restart: "no"
 
