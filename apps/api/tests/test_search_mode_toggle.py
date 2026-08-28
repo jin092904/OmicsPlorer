@@ -94,17 +94,34 @@ async def test_router_accepts_default_mode_without_header(monkeypatch) -> None:
     resp = await _post(app, {"query_text": "x"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["total_estimated"] == 0
+    assert "evaluation_trace" not in resp.json()
 
 
 async def test_router_accepts_eval_mode_with_header(monkeypatch) -> None:
     """`mode=bm25_only` + `X-Eval-Mode: 1` 헤더 있음 → 200."""
     async def stub_hybrid_search(req: dict) -> dict:
         assert req["mode"] == "bm25_only"
+        assert req["_evaluation_trace"] is True
         return {
             "results": [], "facets": {"modality": [], "source_db": [], "disease_ids": [],
                        "tissue_ids": [], "cell_type_ids": []},
             "page": 1, "page_size": 20, "total_estimated": 0,
             "latency_ms": 1, "query_id": "test-id",
+            "evaluation_trace": {
+                "requested_mode": "bm25_only",
+                "effective_mode": "bm25_only",
+                "configuration_sha256": "a" * 64,
+                "components": {
+                    "lexical": "used",
+                    "dense": "not_requested",
+                    "reranker": "not_requested",
+                    "translation": "not_needed",
+                    "query_understanding": "disabled",
+                    "accession_shortcut": {"enabled": True, "applied": False},
+                    "cardinality_boost": {"enabled": True, "applied": False},
+                },
+                "fallbacks": [],
+            },
         }
 
     import src.routers.search as search_router_module
@@ -117,3 +134,14 @@ async def test_router_accepts_eval_mode_with_header(monkeypatch) -> None:
         headers={"X-Eval-Mode": "1"},
     )
     assert resp.status_code == 200, resp.text
+    assert resp.json()["evaluation_trace"]["effective_mode"] == "bm25_only"
+
+
+async def test_router_rejects_invalid_eval_header_value() -> None:
+    app = _app_for_test()
+    resp = await _post(
+        app,
+        {"query_text": "x", "mode": "bm25_only"},
+        headers={"X-Eval-Mode": "yes"},
+    )
+    assert resp.status_code == 400

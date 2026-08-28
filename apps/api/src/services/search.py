@@ -16,8 +16,9 @@ import os
 import re
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -59,6 +60,109 @@ class HybridHit:
     lexical_rank: int | None = None
     rrf: float = 0.0
     rerank: float | None = None
+
+
+_ENABLED_VALUES = {"1", "true", "yes", "on"}
+
+
+def _env_enabled(name: str, *, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in _ENABLED_VALUES
+
+
+@lru_cache(maxsize=4)
+def _canonical_json_file_sha256(path_text: str) -> str:
+    """Hash parsed JSON using the frozen-release canonicalization contract."""
+
+    raw = json.loads(Path(path_text).read_text(encoding="utf-8"))
+    canonical = json.dumps(
+        raw,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _effective_configuration_sha256() -> str | None:
+    """Return the digest of the mounted effective-server configuration.
+
+    A caller cannot supply a digest directly: the API computes it from the
+    parsed JSON file that is mounted into the evaluated deployment. Missing or
+    invalid evidence produces ``None`` and is rejected by the offline release
+    validator without affecting ordinary product requests.
+    """
+
+    path_text = os.environ.get("EFFECTIVE_SERVER_CONFIG_PATH", "").strip()
+    if not path_text:
+        return None
+    try:
+        return _canonical_json_file_sha256(path_text)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "effective server configuration unavailable (%s)",
+            type(exc).__name__,
+        )
+        return None
+
+
+@dataclass
+class _EvaluationTraceState:
+    """Mutable internal execution state converted to the public trace at return."""
+
+    enabled: bool
+    requested_mode: str
+    configuration_sha256: str | None = None
+    lexical: str = "not_requested"
+    dense: str = "not_requested"
+    reranker: str = "not_requested"
+    translation: str = "not_needed"
+    query_understanding: str = "disabled"
+    accession_shortcut_enabled: bool = True
+    accession_shortcut_applied: bool = False
+    cardinality_boost_enabled: bool = True
+    cardinality_boost_applied: bool = False
+    fallbacks: list[str] = field(default_factory=list)
+
+    def effective_mode(self) -> str:
+        lexical_used = self.lexical == "used"
+        dense_used = self.dense == "used"
+        reranker_used = self.reranker == "used"
+        if lexical_used and dense_used:
+            return "rrf_rerank" if reranker_used else "rrf"
+        if lexical_used:
+            return "bm25_rerank" if reranker_used else "bm25_only"
+        if dense_used:
+            return "dense_rerank" if reranker_used else "dense_only"
+        return "unavailable"
+
+    def as_dict(self) -> dict[str, Any] | None:
+        if not self.enabled:
+            return None
+        return {
+            "requested_mode": self.requested_mode,
+            "effective_mode": self.effective_mode(),
+            "configuration_sha256": self.configuration_sha256,
+            "components": {
+                "lexical": self.lexical,
+                "dense": self.dense,
+                "reranker": self.reranker,
+                "translation": self.translation,
+                "query_understanding": self.query_understanding,
+                "accession_shortcut": {
+                    "enabled": self.accession_shortcut_enabled,
+                    "applied": self.accession_shortcut_applied,
+                },
+                "cardinality_boost": {
+                    "enabled": self.cardinality_boost_enabled,
+                    "applied": self.cardinality_boost_applied,
+                },
+            },
+            "fallbacks": list(self.fallbacks),
+        }
 
 
 _ARRAY_FIELDS = (
@@ -309,6 +413,31 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
         corpus              ('production' | 'biocaddie_2016_eval', 기본 production)
     """
     t0 = time.perf_counter()
+    requested_mode = str(req.get("mode", "rrf_rerank"))
+    trace = _EvaluationTraceState(
+        enabled=bool(req.get("_evaluation_trace")),
+        requested_mode=requested_mode,
+        configuration_sha256=(
+            _effective_configuration_sha256()
+            if req.get("_evaluation_trace")
+            else None
+        ),
+        translation=("not_needed" if req.get("auto_translate", True) else "disabled"),
+        query_understanding=(
+            "bypassed"
+            if req.get("_skip_qu") and _env_enabled("QUERY_UNDERSTANDING_ENABLED")
+            else "used"
+            if _env_enabled("QUERY_UNDERSTANDING_ENABLED")
+            else "disabled"
+        ),
+        accession_shortcut_enabled=_env_enabled(
+            "ACCESSION_SHORTCUT_ENABLED", default=True
+        ),
+        cardinality_boost_enabled=_env_enabled(
+            "CARDINALITY_BOOST_ENABLED", default=True
+        ),
+        fallbacks=list(req.get("_forced_fallbacks") or []),
+    )
     original_query: str = req["query_text"]
     query_text: str = original_query
     translated_query: str | None = None
@@ -328,8 +457,14 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
             if t_en and t_en.strip() and t_en.lower() != query_text.lower():
                 translated_query = t_en
                 query_text = t_en  # 이후 검색은 영어로
+                trace.translation = "used"
+            else:
+                trace.translation = "failed"
+                trace.fallbacks.append("translation_no_effective_output")
         except Exception as e:
             logger.warning("auto translate failed: %s", type(e).__name__)
+            trace.translation = "failed"
+            trace.fallbacks.append(f"translation_failed:{type(e).__name__}")
 
     # ---- Sol 1: query understanding (compound query gap, 2026-06-04) ----
     # Extract structured constraints from the (now-English) query and fill any
@@ -338,7 +473,7 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
     #
     # Gated by QUERY_UNDERSTANDING_ENABLED env (default off) so we can disable
     # instantly via worker restart without code change.
-    if os.environ.get("QUERY_UNDERSTANDING_ENABLED", "0").strip() in {"1", "true", "yes", "on"} \
+    if _env_enabled("QUERY_UNDERSTANDING_ENABLED") \
             and not req.get("_skip_qu"):
         try:
             from src.services.query_understanding import (
@@ -351,6 +486,12 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
         except Exception as e:
             logger.warning("query_understanding call failed: %s", type(e).__name__)
             qu = None
+            trace.query_understanding = "failed"
+            trace.fallbacks.append(f"query_understanding_failed:{type(e).__name__}")
+
+        if qu is None and trace.query_understanding != "failed":
+            trace.query_understanding = "failed"
+            trace.fallbacks.append("query_understanding_no_output")
 
         if qu is not None:
             # Map text labels -> CURIEs via OntologyMapper (workers package).
@@ -370,6 +511,10 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
                             curies["cell_types"] = [m.curie for m in await lookup_many(_mapper, qu["cell_types"], "cl")]
             except Exception as e:
                 logger.warning("query_understanding ontology lookup failed: %s", type(e).__name__)
+                trace.query_understanding = "failed"
+                trace.fallbacks.append(
+                    f"query_understanding_ontology_failed:{type(e).__name__}"
+                )
 
             # MERGE — only fill empty slots, NEVER override user-provided values.
             # (req fields come from HTTP client / UI chips; user intent wins.)
@@ -434,7 +579,7 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
     top_k = MAX_top_k
 
     # Mode 분기 + corpus switch (ADR 0006 evaluation)
-    mode = req.get("mode", "rrf_rerank")
+    mode = requested_mode
     corpus = req.get("corpus", "production")
     qdrant_collection = EVAL_CORPUS_QDRANT.get(corpus, QDRANT_COLLECTION)
     os_index = EVAL_CORPUS_OS.get(corpus, OS_INDEX)
@@ -448,10 +593,11 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
         _re.IGNORECASE,
     )
     accession_query = bool(ACCESSION_RE.search(query_text or ""))
-    if accession_query and mode == "rrf_rerank":
+    if trace.accession_shortcut_enabled and accession_query and mode == "rrf_rerank":
         # production default 일 때 BM25 단독으로 — source_id^15 boost 가
         # 정확 매치를 1위로 올림. RRF/rerank 는 rank merge 때문에 boost 못 살림.
         mode = "bm25_only"
+        trace.accession_shortcut_applied = True
 
     use_dense = mode in ("dense_only", "rrf", "rrf_rerank")
     use_lexical = mode in ("bm25_only", "rrf", "rrf_rerank")
@@ -471,6 +617,8 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
         use_dense = False
         use_rerank = False
         use_lexical = True
+        if mode != "bm25_only":
+            trace.fallbacks.append(f"field_sort_override:{req.get('sort')}")
 
     qdrant = AsyncQdrantClient(url=os.environ.get("QDRANT_URL", DEFAULT_QDRANT_URL))
     os_client = AsyncOpenSearch(
@@ -494,8 +642,11 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
                     with_payload=True,
                 )
                 qd_hits_points = qd_resp.points
+                trace.dense = "used"
             except Exception as e:
                 logger.warning("dense retrieval failed (%s) — degrading to lexical/BM25", type(e).__name__)
+                trace.dense = "failed"
+                trace.fallbacks.append(f"dense_failed:{type(e).__name__}")
                 use_dense = False
                 use_lexical = True  # 프로덕션은 BM25 로 fallback (결과 0건 방지)
                 if mode == "dense_only":
@@ -546,12 +697,15 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
                     os_body["sort"] = [os_sort]
                 os_resp = await os_client.search(index=os_index, body=os_body)
                 os_hits = os_resp["hits"]["hits"]
+                trace.lexical = "used"
                 try:
                     os_total = int(os_resp["hits"]["total"]["value"])
                 except (KeyError, TypeError, ValueError):
                     os_total = len(os_hits)
             except Exception as e:
                 logger.warning("lexical retrieval failed (%s)", type(e).__name__)
+                trace.lexical = "failed"
+                trace.fallbacks.append(f"lexical_failed:{type(e).__name__}")
                 use_lexical = False
                 os_hits = []
                 os_total = 0
@@ -605,53 +759,79 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
 
         # 5b) Cross-encoder rerank (mode == rrf_rerank 일 때만)
         if use_rerank:
-            from src.services.reranker import is_available as rerank_available
-            from src.services.reranker import rerank_pairs, rerank_top_n
+            try:
+                from src.services.reranker import is_available as rerank_available
+                from src.services.reranker import rerank_pairs, rerank_top_n
 
-            rerank_n = rerank_top_n()
-            if rerank_available() and len(ordered) > 0:
-                top = ordered[:rerank_n]
-                docs = []
-                for h in top:
-                    p = h.payload
-                    title = p.get("title") or ""
-                    abstract = (p.get("abstract") or "")[:900]
-                    # Sol 5 — 구조화 메타데이터를 텍스트로 주입.
-                    # cross-encoder 가 'paired'/'matched' 같은 디자인 의도를
-                    # tissue/modality 카운트로 disambiguate 할 수 있도록.
-                    meta_lines: list[str] = []
-                    tissues = p.get("tissue_ids") or []
-                    modality = p.get("modality") or []
-                    if tissues:
-                        meta_lines.append(
-                            f"tissues ({len(set(tissues))}): {', '.join(sorted(set(tissues)))}"
+                rerank_n = rerank_top_n()
+                if not rerank_available():
+                    trace.reranker = "failed"
+                    trace.fallbacks.append("reranker_unavailable")
+                elif len(ordered) == 0:
+                    # The configured path was available but had no candidates to score.
+                    trace.reranker = "used"
+                else:
+                    top = ordered[:rerank_n]
+                    docs = []
+                    for h in top:
+                        p = h.payload
+                        title = p.get("title") or ""
+                        abstract = (p.get("abstract") or "")[:900]
+                        # Sol 5 — 구조화 메타데이터를 텍스트로 주입.
+                        # cross-encoder 가 'paired'/'matched' 같은 디자인 의도를
+                        # tissue/modality 카운트로 disambiguate 할 수 있도록.
+                        meta_lines: list[str] = []
+                        tissues = p.get("tissue_ids") or []
+                        modality = p.get("modality") or []
+                        if tissues:
+                            meta_lines.append(
+                                f"tissues ({len(set(tissues))}): {', '.join(sorted(set(tissues)))}"
+                            )
+                        if modality:
+                            meta_lines.append(
+                                f"modality ({len(set(modality))}): {', '.join(sorted(set(modality)))}"
+                            )
+                        cohort = p.get("cohort_design") if isinstance(p.get("cohort_design"), dict) else None
+                        design_type = (cohort or {}).get("design_type")
+                        if design_type:
+                            meta_lines.append(f"design: {design_type}")
+                        n_samples = p.get("n_samples")
+                        if n_samples:
+                            meta_lines.append(f"n_samples: {n_samples}")
+                        meta_block = ("\n" + "\n".join(meta_lines) + "\n") if meta_lines else ""
+                        docs.append(f"{title}\n{meta_block}\n{abstract}")
+                    # CPU-bound (PyTorch inference). 별도 thread 로 빼서 event loop 비움.
+                    import asyncio
+                    scores = await asyncio.to_thread(rerank_pairs, query_text, docs)
+                    if scores is None or len(scores) != len(top):
+                        trace.reranker = "failed"
+                        trace.fallbacks.append("reranker_incomplete_output")
+                    else:
+                        trace.reranker = "used"
+                        for h, s in zip(top, scores, strict=True):
+                            h.rerank = s
+                        # rerank 점수 기준 재정렬 — 못 받은 (top-N 밖) 은 그대로 후순위
+                        top_sorted = sorted(
+                            top,
+                            key=lambda x: x.rerank
+                            if x.rerank is not None
+                            else float("-inf"),
+                            reverse=True,
                         )
-                    if modality:
-                        meta_lines.append(
-                            f"modality ({len(set(modality))}): {', '.join(sorted(set(modality)))}"
-                        )
-                    cohort = p.get("cohort_design") if isinstance(p.get("cohort_design"), dict) else None
-                    design_type = (cohort or {}).get("design_type")
-                    if design_type:
-                        meta_lines.append(f"design: {design_type}")
-                    n_samples = p.get("n_samples")
-                    if n_samples:
-                        meta_lines.append(f"n_samples: {n_samples}")
-                    meta_block = ("\n" + "\n".join(meta_lines) + "\n") if meta_lines else ""
-                    docs.append(f"{title}\n{meta_block}\n{abstract}")
-                # CPU-bound (PyTorch inference). 별도 thread 로 빼서 event loop 비움.
-                import asyncio
-                scores = await asyncio.to_thread(rerank_pairs, query_text, docs)
-                if scores is not None:
-                    for h, s in zip(top, scores):
-                        h.rerank = s
-                    # rerank 점수 기준 재정렬 — 못 받은 (top-N 밖) 은 그대로 후순위
-                    top_sorted = sorted(top, key=lambda x: x.rerank or float("-inf"), reverse=True)
-                    ordered = top_sorted + ordered[rerank_n:]
+                        ordered = top_sorted + ordered[rerank_n:]
+            except Exception as e:
+                logger.warning("reranker failed (%s)", type(e).__name__)
+                trace.reranker = "failed"
+                trace.fallbacks.append(f"reranker_failed:{type(e).__name__}")
 
         # 5b') Cardinality boost — 디자인 의도 마커가 쿼리에 있으면 multi-facet doc 점수 강화.
         # rerank 된 top-N 안에서만 적용 (안 본 후보는 그대로). 1.10x~1.25x.
-        if _query_has_design_intent(query_text) and len(ordered) > 0 and not field_sort:
+        if (
+            trace.cardinality_boost_enabled
+            and _query_has_design_intent(query_text)
+            and len(ordered) > 0
+            and not field_sort
+        ):
             boost_n = 0
             boost_top = ordered[: min(len(ordered), 20)]
             for h in boost_top:
@@ -663,6 +843,7 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
                     h.rrf *= mult
                     boost_n += 1
             if boost_n:
+                trace.cardinality_boost_applied = True
                 logger.info("cardinality boost applied to %d/%d top hits", boost_n, len(boost_top))
                 # 재정렬
                 if use_rerank:
@@ -812,6 +993,7 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
             "query_id": str(uuid.uuid4()),
             "original_query": original_query if translated_query else None,
             "translated_query": translated_query,
+            "evaluation_trace": trace.as_dict(),
         }
     finally:
         await qdrant.close()

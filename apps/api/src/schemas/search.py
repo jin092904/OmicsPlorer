@@ -129,6 +129,40 @@ class Facets(BaseModel):
     cell_type_ids: list[FacetCount] = []
 
 
+class EvaluationFeatureState(BaseModel):
+    """Whether a shared retrieval feature was configured and used for one request."""
+
+    enabled: bool
+    applied: bool
+
+
+class EvaluationComponents(BaseModel):
+    """Effective component states exposed only for explicit evaluation requests."""
+
+    lexical: Literal["used", "not_requested", "failed"]
+    dense: Literal["used", "not_requested", "failed"]
+    reranker: Literal["used", "not_requested", "failed"]
+    translation: Literal["used", "not_needed", "disabled", "failed"]
+    query_understanding: Literal["used", "disabled", "failed", "bypassed"]
+    accession_shortcut: EvaluationFeatureState
+    cardinality_boost: EvaluationFeatureState
+
+
+class EvaluationTrace(BaseModel):
+    """Per-request evidence for fail-closed frozen retrieval evaluation.
+
+    ``configuration_sha256`` is null when the deployed process has no readable
+    canonical effective-server configuration. Such a response is useful for
+    diagnostics but is not eligible for a frozen submission run.
+    """
+
+    requested_mode: SearchMode
+    effective_mode: str
+    configuration_sha256: str | None = None
+    components: EvaluationComponents
+    fallbacks: list[str] = Field(default_factory=list)
+
+
 class SearchResponse(BaseModel):
     results: list[SearchResult]
     facets: Facets = Facets()
@@ -142,6 +176,11 @@ class SearchResponse(BaseModel):
     # 자동 번역 발생 시 둘 다 set, UI 가 배너로 표시. 미발생 시 둘 다 None.
     original_query: str | None = None
     translated_query: str | None = None
+    # Explicit evaluation requests only; ordinary product responses omit it.
+    evaluation_trace: EvaluationTrace | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
 
 # -- AI's Pick (project_ai_pick_feature.md) -----------------------------------

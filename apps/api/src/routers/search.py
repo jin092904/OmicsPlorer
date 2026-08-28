@@ -34,11 +34,12 @@ async def search(
     req: SearchRequest,
     x_eval_mode: str | None = Header(default=None),
 ) -> SearchResponse:
+    evaluation_requested = x_eval_mode == "1"
     # Safety: non-default mode / non-production corpus 는 X-Eval-Mode 헤더 필수.
     needs_eval_header = (
         req.mode != SearchMode.RRF_RERANK or req.corpus != "production"
     )
-    if needs_eval_header and not x_eval_mode:
+    if needs_eval_header and not evaluation_requested:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -47,7 +48,9 @@ async def search(
             ),
         )
     try:
-        payload = await hybrid_search(req.model_dump())
+        search_req = req.model_dump()
+        search_req["_evaluation_trace"] = evaluation_requested
+        payload = await hybrid_search(search_req)
     except SearchBackendUnavailable:
         # dense·lexical 둘 다 다운 — 원시 500 대신 503(일시적 장애).
         raise HTTPException(
@@ -63,6 +66,8 @@ async def search(
         try:
             retry_req = req.model_dump()
             retry_req["_skip_qu"] = True
+            retry_req["_evaluation_trace"] = evaluation_requested
+            retry_req["_forced_fallbacks"] = ["query_understanding_zero_result_retry"]
             retry_payload = await hybrid_search(retry_req)
             if (retry_payload.get("total_estimated") or 0) > 0:
                 payload = retry_payload
@@ -86,7 +91,7 @@ async def ai_pick(
     needs_eval_header = (
         req.mode != SearchMode.RRF_RERANK or req.corpus != "production"
     )
-    if needs_eval_header and not x_eval_mode:
+    if needs_eval_header and x_eval_mode != "1":
         raise HTTPException(
             status_code=400,
             detail=(
