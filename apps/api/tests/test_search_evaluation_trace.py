@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -66,11 +67,42 @@ class _FakeOpenSearch:
 
 @pytest.fixture
 def effective_config(tmp_path, monkeypatch) -> str:
+    monkeypatch.setenv("OLLAMA_MODEL_EMBED", "test-embedding")
+    monkeypatch.setenv("OLLAMA_MODEL_EXTRACTION", "test-translation")
+    monkeypatch.setenv("RERANKER_MODEL", "test-reranker")
+    monkeypatch.setenv("RERANKER_TOP_N", "20")
+    configuration = {
+        "schema_version": "omicsplorer-effective-server-config-v1",
+        "corpus": "production",
+        "lexical_index": "datasets_v2",
+        "dense_collection": "datasets_v2",
+        "lexical_candidate_count": 200,
+        "dense_candidate_count": 200,
+        "rrf_k": 60,
+        "query_embedding": {
+            "checkpoint": "test-embedding",
+            "truncation_dimension": 1024,
+        },
+        "reranker": {"checkpoint": "test-reranker", "top_n": 20},
+        "translation": {
+            "enabled": True,
+            "model": {"checkpoint": "test-translation"},
+        },
+        "query_understanding": {"enabled": False, "model": None},
+        "access_preference": "open_only",
+        "accession_shortcut_enabled": True,
+        "cardinality_boost_enabled": True,
+    }
     path = tmp_path / "effective-server-config.json"
-    path.write_text('{"z":2,"a":1}\n', encoding="utf-8")
+    path.write_text(json.dumps(configuration, indent=2) + "\n", encoding="utf-8")
     monkeypatch.setenv("EFFECTIVE_SERVER_CONFIG_PATH", str(path))
-    search_service._canonical_json_file_sha256.cache_clear()
-    return hashlib.sha256(b'{"a":1,"z":2}').hexdigest()
+    search_service._canonical_json_file.cache_clear()
+    canonical = json.dumps(
+        configuration,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def test_effective_config_digest_uses_canonical_parsed_json(effective_config: str) -> None:
@@ -89,6 +121,28 @@ def test_trace_state_derives_effective_mode_from_used_components() -> None:
 
     trace.dense = "failed"
     assert trace.effective_mode() == "bm25_rerank"
+
+
+def test_runtime_configuration_mismatch_invalidates_trace() -> None:
+    trace = search_service._EvaluationTraceState(
+        enabled=True,
+        requested_mode="rrf",
+    )
+    search_service._record_configuration_mismatches(
+        trace,
+        {"rrf_k": 61, "reranker": {"top_n": 20}},
+        {"rrf_k": 60, "reranker.top_n": 20},
+    )
+    assert trace.fallbacks == ["configuration_runtime_mismatch:rrf_k"]
+
+
+def test_missing_configuration_invalidates_trace() -> None:
+    trace = search_service._EvaluationTraceState(
+        enabled=True,
+        requested_mode="rrf",
+    )
+    search_service._record_configuration_mismatches(trace, None, {"rrf_k": 60})
+    assert trace.fallbacks == ["configuration_missing_or_invalid"]
 
 
 @pytest.mark.parametrize(

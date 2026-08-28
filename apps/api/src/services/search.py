@@ -73,10 +73,12 @@ def _env_enabled(name: str, *, default: bool = False) -> bool:
 
 
 @lru_cache(maxsize=4)
-def _canonical_json_file_sha256(path_text: str) -> str:
-    """Hash parsed JSON using the frozen-release canonicalization contract."""
+def _canonical_json_file(path_text: str) -> tuple[dict[str, Any], str]:
+    """Load and hash JSON using the frozen-release canonicalization contract."""
 
     raw = json.loads(Path(path_text).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("effective server configuration must be a JSON object")
     canonical = json.dumps(
         raw,
         ensure_ascii=False,
@@ -84,7 +86,25 @@ def _canonical_json_file_sha256(path_text: str) -> str:
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()
+    return raw, hashlib.sha256(canonical).hexdigest()
+
+
+def _canonical_json_file_sha256(path_text: str) -> str:
+    return _canonical_json_file(path_text)[1]
+
+
+def _effective_configuration_evidence() -> tuple[dict[str, Any] | None, str | None]:
+    path_text = os.environ.get("EFFECTIVE_SERVER_CONFIG_PATH", "").strip()
+    if not path_text:
+        return None, None
+    try:
+        return _canonical_json_file(path_text)
+    except (OSError, ValueError, TypeError) as exc:
+        logger.warning(
+            "effective server configuration unavailable (%s)",
+            type(exc).__name__,
+        )
+        return None, None
 
 
 def _effective_configuration_sha256() -> str | None:
@@ -96,17 +116,33 @@ def _effective_configuration_sha256() -> str | None:
     validator without affecting ordinary product requests.
     """
 
-    path_text = os.environ.get("EFFECTIVE_SERVER_CONFIG_PATH", "").strip()
-    if not path_text:
-        return None
-    try:
-        return _canonical_json_file_sha256(path_text)
-    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-        logger.warning(
-            "effective server configuration unavailable (%s)",
-            type(exc).__name__,
-        )
-        return None
+    return _effective_configuration_evidence()[1]
+
+
+def _nested_value(source: dict[str, Any], dotted_path: str) -> Any:
+    value: Any = source
+    for part in dotted_path.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def _record_configuration_mismatches(
+    trace: _EvaluationTraceState,
+    configuration: dict[str, Any] | None,
+    expected: dict[str, Any],
+) -> None:
+    """Make runtime-observable config disagreement invalidate an eval arm."""
+
+    if not trace.enabled:
+        return
+    if configuration is None:
+        trace.fallbacks.append("configuration_missing_or_invalid")
+        return
+    for path, expected_value in expected.items():
+        if _nested_value(configuration, path) != expected_value:
+            trace.fallbacks.append(f"configuration_runtime_mismatch:{path}")
 
 
 @dataclass
@@ -414,14 +450,15 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
     """
     t0 = time.perf_counter()
     requested_mode = str(req.get("mode", "rrf_rerank"))
+    effective_configuration, effective_configuration_sha256 = (
+        _effective_configuration_evidence()
+        if req.get("_evaluation_trace")
+        else (None, None)
+    )
     trace = _EvaluationTraceState(
         enabled=bool(req.get("_evaluation_trace")),
         requested_mode=requested_mode,
-        configuration_sha256=(
-            _effective_configuration_sha256()
-            if req.get("_evaluation_trace")
-            else None
-        ),
+        configuration_sha256=effective_configuration_sha256,
         translation=("not_needed" if req.get("auto_translate", True) else "disabled"),
         query_understanding=(
             "bypassed"
@@ -583,6 +620,44 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
     corpus = req.get("corpus", "production")
     qdrant_collection = EVAL_CORPUS_QDRANT.get(corpus, QDRANT_COLLECTION)
     os_index = EVAL_CORPUS_OS.get(corpus, OS_INDEX)
+
+    if trace.enabled:
+        from src.services.reranker import DEFAULT_MODEL as _DEFAULT_RERANKER_MODEL
+        from src.services.reranker import rerank_top_n as _rerank_top_n
+
+        expected_runtime_configuration: dict[str, Any] = {
+            "schema_version": "omicsplorer-effective-server-config-v1",
+            "corpus": corpus,
+            "lexical_index": os_index,
+            "dense_collection": qdrant_collection,
+            "lexical_candidate_count": top_k,
+            "dense_candidate_count": top_k,
+            "rrf_k": RRF_K,
+            "query_embedding.checkpoint": os.environ.get(
+                "OLLAMA_MODEL_EMBED", "qwen3-embedding:0.6b"
+            ),
+            "query_embedding.truncation_dimension": 1024,
+            "reranker.checkpoint": os.environ.get(
+                "RERANKER_MODEL", _DEFAULT_RERANKER_MODEL
+            ),
+            "reranker.top_n": _rerank_top_n(),
+            "translation.enabled": bool(req.get("auto_translate", True)),
+            "query_understanding.enabled": _env_enabled(
+                "QUERY_UNDERSTANDING_ENABLED"
+            ),
+            "access_preference": req.get("access_preference", "open_only"),
+            "accession_shortcut_enabled": trace.accession_shortcut_enabled,
+            "cardinality_boost_enabled": trace.cardinality_boost_enabled,
+        }
+        if req.get("auto_translate", True):
+            expected_runtime_configuration["translation.model.checkpoint"] = (
+                os.environ.get("OLLAMA_MODEL_EXTRACTION", "qwen3:4b")
+            )
+        _record_configuration_mismatches(
+            trace,
+            effective_configuration,
+            expected_runtime_configuration,
+        )
 
     # Accession 룩업 패턴 감지 — 사용자가 GSE/SRP/PRJNA 등 정확 ID 로 검색 시
     # reranker 가 정확 매치를 demote 하는 케이스 방지 (quality benchmark 2026-05-28 발견).
