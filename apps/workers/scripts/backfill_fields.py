@@ -62,27 +62,31 @@ def _ops_sql() -> dict[str, tuple[str, str]]:
     for fld, prefixes in GARBAGE.items():
         rx = f"^({prefixes}):"
         cnt = f"SELECT count(*) FROM datasets WHERE EXISTS(SELECT 1 FROM unnest({fld}) x WHERE x ~ '{rx}')"
-        upd = (f"UPDATE datasets SET {fld} = ARRAY(SELECT x FROM unnest({fld}) x WHERE x !~ '{rx}') "
+        upd = (f"UPDATE datasets SET {fld} = ARRAY(SELECT x FROM unnest({fld}) x WHERE x !~ '{rx}'), "
+               "extraction_lineage_id = NULL, build_stage = NULL "
                f"WHERE EXISTS(SELECT 1 FROM unnest({fld}) x WHERE x ~ '{rx}') RETURNING id")
         ops[f"garbage:{fld}"] = (cnt, upd)
     ops["dates"] = (
         "SELECT count(*) FROM datasets WHERE source_db='SRA' AND submission_date IS NULL "
         "AND raw_metadata->'raw'->>'registration_date' ~ '^[0-9]{4}/[0-9]{2}/[0-9]{2}'",
-        "UPDATE datasets SET submission_date = to_date(left(raw_metadata->'raw'->>'registration_date',10),'YYYY/MM/DD') "
+        "UPDATE datasets SET submission_date = to_date(left(raw_metadata->'raw'->>'registration_date',10),'YYYY/MM/DD'), "
+        "extraction_lineage_id = NULL, build_stage = NULL "
         "WHERE source_db='SRA' AND submission_date IS NULL "
         "AND raw_metadata->'raw'->>'registration_date' ~ '^[0-9]{4}/[0-9]{2}/[0-9]{2}' RETURNING id",
     )
     ops["organism:sra"] = (
         "SELECT count(*) FROM datasets WHERE source_db='SRA' AND cardinality(organism_taxid)=0 "
         "AND raw_metadata->'raw'->>'sort_by_organism' ~ '^[0-9]+$'",
-        "UPDATE datasets SET organism_taxid = ARRAY[(raw_metadata->'raw'->>'sort_by_organism')::int] "
+        "UPDATE datasets SET organism_taxid = ARRAY[(raw_metadata->'raw'->>'sort_by_organism')::int], "
+        "extraction_lineage_id = NULL, build_stage = NULL "
         "WHERE source_db='SRA' AND cardinality(organism_taxid)=0 "
         "AND raw_metadata->'raw'->>'sort_by_organism' ~ '^[0-9]+$' RETURNING id",
     )
     ops["organism:geo"] = (
         "SELECT count(*) FROM datasets d WHERE d.source_db='GEO' AND cardinality(d.organism_taxid)=0 "
         "AND EXISTS(SELECT 1 FROM samples s WHERE s.dataset_id=d.id AND s.raw_attributes->>'Sample_taxid_ch1' ~ '^[0-9]+$')",
-        "UPDATE datasets d SET organism_taxid = sub.taxids FROM ("
+        "UPDATE datasets d SET organism_taxid = sub.taxids, "
+        "extraction_lineage_id = NULL, build_stage = NULL FROM ("
         "  SELECT s.dataset_id, array_agg(DISTINCT (s.raw_attributes->>'Sample_taxid_ch1')::int) taxids"
         "  FROM samples s WHERE s.raw_attributes->>'Sample_taxid_ch1' ~ '^[0-9]+$' GROUP BY s.dataset_id) sub "
         "WHERE d.id=sub.dataset_id AND d.source_db='GEO' AND cardinality(d.organism_taxid)=0 RETURNING d.id",

@@ -40,6 +40,8 @@ from pathlib import Path
 import asyncpg
 import httpx
 
+from src.lineage import BUILD_STAGE_MODEL_STRUCTURED, configured_lineage_id
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
@@ -59,6 +61,7 @@ LOG_EVERY = 100
 PHASE3_OLLAMA_URL = os.environ.get("PHASE3_OLLAMA_URL", "http://localhost:11435")
 PHASE3_EXTRACT_MODEL = os.environ.get("OLLAMA_MODEL_EXTRACTION", "gemma4:31b")
 PHASE3_EMBED_MODEL = os.environ.get("OLLAMA_MODEL_EMBED", "qwen3-embedding:8b")
+PHASE3_LINEAGE_ID = configured_lineage_id("PHASE3_EXTRACTION_LINEAGE_ID")
 
 # Search query — sequencing-related projects only. Reduces from ~700k → ~440k.
 SRA_SEARCH_TERM = (
@@ -283,11 +286,12 @@ async def insert_dataset(
           (id, source_db, source_id, title, abstract, modality, organism_taxid,
            disease_ids, tissue_ids, cell_type_ids, assay_ids,
            access_type, has_processed_data, has_raw_data, metadata_completeness,
-           submission_date, raw_metadata, extraction_version, bioproject_id)
+           submission_date, raw_metadata, extraction_version, bioproject_id,
+           extraction_lineage_id, build_stage)
         VALUES ($1, 'SRA', $2, $3, $4, $5::text[], $6::int[],
                 $7::text[], $8::text[], $9::text[], $10::text[],
                 'open', false, true, 0.5,
-                $11, $12::jsonb, $13, $14)
+                $11, $12::jsonb, $13, $14, $15, $16)
         ON CONFLICT (source_db, source_id) DO NOTHING
         RETURNING id
         """,
@@ -305,6 +309,8 @@ async def insert_dataset(
         json.dumps({"source": "phase3-bioproject", "raw": project.get("raw", {})}),
         "v3-phase3-2026-05-28",
         project["accession"],
+        PHASE3_LINEAGE_ID,
+        BUILD_STAGE_MODEL_STRUCTURED,
     )
     if row is None:
         # conflict — 이미 다른 source 에서 insert 된 PRJNA. 정상 skip.
@@ -340,6 +346,9 @@ async def insert_dataset(
             "has_processed_data": False,
             "submission_date": str(sub_date) if sub_date else None,
             "bioproject_id": project["accession"],
+            "extraction_version": "v3-phase3-2026-05-28",
+            "extraction_lineage_id": PHASE3_LINEAGE_ID,
+            "build_stage": BUILD_STAGE_MODEL_STRUCTURED,
         }
         await qdrant_client.upsert(
             collection_name="datasets_v2",
@@ -363,6 +372,9 @@ async def insert_dataset(
                 "cell_type_ids": extract.get("cell_types") or [],
                 "submission_date": str(sub_date) if sub_date else None,
                 "bioproject_id": project["accession"],
+                "extraction_version": "v3-phase3-2026-05-28",
+                "extraction_lineage_id": PHASE3_LINEAGE_ID,
+                "build_stage": BUILD_STAGE_MODEL_STRUCTURED,
             },
         )
     except Exception as e:

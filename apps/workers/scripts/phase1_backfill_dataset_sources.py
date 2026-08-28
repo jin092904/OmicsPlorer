@@ -52,7 +52,9 @@ async def step1_backfill_bioproject(conn: asyncpg.Connection) -> int:
         """
         UPDATE datasets
         SET bioproject_id =
-          raw_metadata->'result'->(raw_metadata->'result'->'uids'->>0)->>'bioproject'
+              raw_metadata->'result'->(raw_metadata->'result'->'uids'->>0)->>'bioproject',
+            extraction_lineage_id = NULL,
+            build_stage = NULL
         WHERE source_db = 'GEO'
           AND bioproject_id IS NULL
           AND (raw_metadata->'result'->(raw_metadata->'result'->'uids'->>0)->>'bioproject') <> ''

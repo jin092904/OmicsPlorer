@@ -53,6 +53,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.lineage import (  # noqa: E402
+    BUILD_STAGE_MODEL_ENRICHED,
+    composite_lineage_id,
+    configured_lineage_id,
+)
+
 CHECKPOINT_PATH = Path("/tmp/genofinder-sol4-checkpoint.json")
 REPORT_PATH = Path("/tmp/genofinder-sol4-report.json")
 LOG_DIR = Path(os.environ.get("SOL4_LOG_DIR", str(ROOT / "logs")))
@@ -72,6 +78,7 @@ log = logging.getLogger("sol4-retag")
 
 # ─────────── Config ───────────
 EXTRACTION_VERSION = "sol4-gemma4-2026-06-07"
+SOL4_STAGE_LINEAGE_ID = configured_lineage_id("SOL4_EXTRACTION_LINEAGE_ID")
 LINKED_VIA_MARKER = "sol4-retag"
 LOG_EVERY = 50          # checkpoint save cadence
 DEFAULT_LIMIT = 25_000
@@ -159,6 +166,7 @@ SELECT
   d.cell_type_ids,
   d.disease_ids,
   d.cohort_design,
+  d.extraction_lineage_id,
   (
     CASE WHEN d.title ILIKE '%paired%' OR d.title ILIKE '%matched%'
               OR d.abstract ILIKE '%paired%' OR d.abstract ILIKE '%matched%' THEN 1 ELSE 0 END
@@ -522,7 +530,9 @@ UPDATE datasets
        disease_ids        = $4::text[],
        cohort_design      = $5::jsonb,
        raw_metadata       = COALESCE(raw_metadata, '{}'::jsonb) || $6::jsonb,
-       extraction_version = $7
+       extraction_version = $7,
+       extraction_lineage_id = $8,
+       build_stage = $9
  WHERE id = $1
 """
 
@@ -598,6 +608,8 @@ async def apply_extraction(
         json.dumps(cohort_design),
         json.dumps(raw_meta_patch),
         EXTRACTION_VERSION,
+        composite_lineage_id(SOL4_STAGE_LINEAGE_ID, row.get("extraction_lineage_id")),
+        BUILD_STAGE_MODEL_ENRICHED,
     )
     await pg.execute(
         INSERT_DATASET_SOURCE_SQL,
@@ -805,6 +817,7 @@ WITH scored AS (
   SELECT
     d.id, d.source_db, d.source_id, d.title, d.abstract, d.n_samples,
     d.raw_metadata, d.tissue_ids, d.cell_type_ids, d.disease_ids, d.cohort_design,
+    d.extraction_lineage_id,
     (
         (CASE WHEN COALESCE(array_length(d.tissue_ids, 1), 0)    = 0 THEN 1 ELSE 0 END)
       + (CASE WHEN COALESCE(array_length(d.cell_type_ids, 1), 0) = 0 THEN 1 ELSE 0 END)
@@ -870,9 +883,13 @@ WHERE d.extraction_version IS DISTINCT FROM $1
 
 # 최소근거 미달(초록 없음 + 샘플 제목 빈약) 건을 LLM 없이 버전만 찍어 후보에서 탈락시킴
 # (다음 밤에 같은 부실 row 가 weakness 상위로 다시 올라와 큐를 막는 것 방지). 데이터는
-# 한 글자도 안 건드림(version 컬럼만 갱신) → never-shrink 유지.
+# domain metadata 값은 건드리지 않지만 version을 바꾸므로 기존 lineage 적격성은 무효화한다.
 STAMP_VERSION_ONLY_SQL = """
-UPDATE datasets SET extraction_version = $2 WHERE id = $1
+UPDATE datasets
+   SET extraction_version = $2,
+       extraction_lineage_id = NULL,
+       build_stage = NULL
+ WHERE id = $1
 """
 
 # 실제 cohort_design 이 이미 있는 dataset 용 — cohort_design 을 SET 에서 제외하여 원본을
@@ -883,7 +900,9 @@ UPDATE datasets
        cell_type_ids      = $3::text[],
        disease_ids        = $4::text[],
        raw_metadata       = COALESCE(raw_metadata, '{}'::jsonb) || $5::jsonb,
-       extraction_version = $6
+       extraction_version = $6,
+       extraction_lineage_id = $7,
+       build_stage = $8
  WHERE id = $1
 """
 
@@ -1002,6 +1021,8 @@ async def apply_extraction_auto(
             UPDATE_DATASET_SQL,
             row["id"], merged_tissue, merged_cell, merged_disease,
             json.dumps(cohort_to_write), json.dumps(raw_meta_patch), EXTRACTION_VERSION,
+            composite_lineage_id(SOL4_STAGE_LINEAGE_ID, row.get("extraction_lineage_id")),
+            BUILD_STAGE_MODEL_ENRICHED,
         )
     else:
         # 실제(또는 비정형) cohort 보존 — cohort_design 컬럼은 UPDATE 대상에서 제외.
@@ -1009,6 +1030,8 @@ async def apply_extraction_auto(
             UPDATE_DATASET_NO_COHORT_SQL,
             row["id"], merged_tissue, merged_cell, merged_disease,
             json.dumps(raw_meta_patch), EXTRACTION_VERSION,
+            composite_lineage_id(SOL4_STAGE_LINEAGE_ID, row.get("extraction_lineage_id")),
+            BUILD_STAGE_MODEL_ENRICHED,
         )
     await pg.execute(
         INSERT_DATASET_SOURCE_SQL,

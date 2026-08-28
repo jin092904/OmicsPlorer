@@ -168,7 +168,11 @@ async def run(*, field: str, top: int | None, commit: bool, concurrency: int,
                 old = list(r["vals"] or [])
                 new = _apply(old, mapping)
                 if new != old:
-                    await pg.execute(f"UPDATE datasets SET {col} = $2 WHERE id = $1::uuid", r["id"], new)
+                    await pg.execute(
+                        f"UPDATE datasets SET {col} = $2, extraction_lineage_id = NULL, "
+                        "build_stage = NULL WHERE id = $1::uuid",
+                        r["id"], new,
+                    )
                     changed.append(str(r["id"]))
         log.info("applied: %d rows changed", len(changed))
         if not changed:

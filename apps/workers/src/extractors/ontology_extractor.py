@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from src.extractors.llm_client import OllamaClient
 from src.extractors.structurer import EXTRACTION_VERSION, extract_all
+from src.lineage import BUILD_STAGE_MODEL_STRUCTURED, configured_lineage_id
 from src.ontology.mapper import OntologyMapper, lookup_many
 
 
@@ -26,6 +27,8 @@ async def extract_with_ontology(
             "tissue_ids":    list[str],   # UBERON:xxxxxxx
             "cell_type_ids": list[str],   # CL:xxxxxxx
             "extraction_version": str,
+            "stage_lineage_id": str | None,
+            "build_stage": str,
         }
     """
     parts = await extract_all(ollama, title, abstract)
@@ -38,4 +41,6 @@ async def extract_with_ontology(
         "tissue_ids": [m.curie for m in tissues],
         "cell_type_ids": [m.curie for m in cell_types],
         "extraction_version": EXTRACTION_VERSION,
+        "stage_lineage_id": configured_lineage_id("METADATA_EXTRACTION_LINEAGE_ID"),
+        "build_stage": BUILD_STAGE_MODEL_STRUCTURED,
     }

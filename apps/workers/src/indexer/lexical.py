@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 INDEX_NAME = "datasets_v2"
 DEFAULT_OS_URL = "http://localhost:9200"
+LINEAGE_MAPPING_FIELDS: dict[str, Any] = {
+    "extraction_lineage_id": {"type": "keyword"},
+    "build_stage": {"type": "keyword"},
+}
 
 # 기본 BM25 분석기 + multi-field. abstract/title 가중치는 검색 시 boost 로 조정.
 INDEX_BODY: dict[str, Any] = {
@@ -60,6 +64,7 @@ INDEX_BODY: dict[str, Any] = {
             "n_samples": {"type": "integer"},
             "n_subjects": {"type": "integer"},
             "extraction_version": {"type": "keyword"},
+            **LINEAGE_MAPPING_FIELDS,
         },
     },
 }
@@ -86,6 +91,19 @@ async def ensure_index(client: AsyncOpenSearch) -> None:
     """idempotent — 인덱스가 없으면 생성."""
     exists = await client.indices.exists(index=INDEX_NAME)
     if exists:
+        mapping = await client.indices.get_mapping(index=INDEX_NAME)
+        properties = mapping.get(INDEX_NAME, {}).get("mappings", {}).get("properties", {})
+        missing = {
+            name: definition
+            for name, definition in LINEAGE_MAPPING_FIELDS.items()
+            if name not in properties
+        }
+        if missing:
+            await client.indices.put_mapping(
+                index=INDEX_NAME,
+                body={"properties": missing},
+            )
+            logger.info("added lineage fields to OpenSearch index %s", INDEX_NAME)
         return
     await client.indices.create(index=INDEX_NAME, body=INDEX_BODY)
     logger.info("created opensearch index %s", INDEX_NAME)
@@ -114,6 +132,8 @@ def _doc(row: dict[str, Any]) -> dict[str, Any]:
         "n_samples": row.get("n_samples"),
         "n_subjects": row.get("n_subjects"),
         "extraction_version": row.get("extraction_version"),
+        "extraction_lineage_id": row.get("extraction_lineage_id"),
+        "build_stage": row.get("build_stage"),
     }
 
 

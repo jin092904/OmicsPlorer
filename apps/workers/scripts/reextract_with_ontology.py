@@ -35,6 +35,7 @@ from src.indexer.lexical import (
 from src.indexer.lexical import (
     upsert_many as os_upsert_many,
 )
+from src.lineage import composite_lineage_id
 from src.ontology.mapper import OntologyMapper
 
 
@@ -49,7 +50,10 @@ async def reextract(
     """
     eng = get_engine()
     async with eng.connect() as conn:
-        q = text("SELECT id, source_db, source_id, title, abstract FROM datasets WHERE title IS NOT NULL")
+        q = text(
+            "SELECT id, source_db, source_id, title, abstract, extraction_lineage_id "
+            "FROM datasets WHERE title IS NOT NULL"
+        )
         result = await conn.execute(q)
         all_rows = list(result.fetchall())
     if stride > 1:
@@ -80,12 +84,18 @@ async def reextract(
                                 disease_ids        = :d,
                                 tissue_ids         = :t,
                                 cell_type_ids      = :c,
-                                extraction_version = :v
+                                extraction_version = :v,
+                                extraction_lineage_id = :lineage,
+                                build_stage = :build_stage
                             WHERE id = :id
                         """),
                         {"m": out["modality"], "d": out["disease_ids"],
                          "t": out["tissue_ids"], "c": out["cell_type_ids"],
-                         "v": out["extraction_version"], "id": r.id},
+                         "v": out["extraction_version"],
+                         "lineage": composite_lineage_id(
+                             out["stage_lineage_id"], r.extraction_lineage_id
+                         ),
+                         "build_stage": out["build_stage"], "id": r.id},
                     )
                     if i % 20 == 0:
                         print(f"  {i}/{len(rows)} done — diseases nonempty={counters['disease_ids.nonempty']} "
@@ -116,7 +126,8 @@ async def reextract(
                 SELECT id, source_db, source_id, title, abstract, modality, organism_taxid,
                        disease_ids, tissue_ids, cell_type_ids,
                        access_type, has_processed_data, submission_date,
-                       n_samples, n_subjects, platform, library_strategy, extraction_version
+                       n_samples, n_subjects, platform, library_strategy, extraction_version,
+                       extraction_lineage_id, build_stage
                   FROM datasets
                   ORDER BY submission_date DESC NULLS LAST
             """))

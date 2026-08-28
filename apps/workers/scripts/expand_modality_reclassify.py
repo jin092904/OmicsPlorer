@@ -144,7 +144,8 @@ async def update_postgres(conn: asyncpg.Connection) -> dict:
         for i in range(0, len(changes), batch):
             chunk = changes[i : i + batch]
             await conn.executemany(
-                "UPDATE datasets SET modality=$2::text[] WHERE id=$1",
+                "UPDATE datasets SET modality=$2::text[], extraction_lineage_id=NULL, "
+                "build_stage=NULL WHERE id=$1",
                 chunk,
             )
             log.info("  updated %d / %d", min(i + batch, len(changes)), len(changes))
