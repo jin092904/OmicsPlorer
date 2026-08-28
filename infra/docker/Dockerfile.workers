@@ -29,6 +29,7 @@ FROM ${PYTHON_IMAGE} AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PYTHONPATH="/app:/app/scripts" \
     PATH="/app/.venv/bin:${PATH}"
 
 RUN apt-get -o APT::Sandbox::User=root update \
