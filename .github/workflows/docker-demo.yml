@@ -47,7 +47,30 @@ jobs:
         run: make docker-validate
 
       - name: Build and start the synthetic demo
-        run: make docker-demo
+        shell: bash
+        run: |
+          set -o pipefail
+          if make docker-demo 2>&1 | tee /tmp/omicsplorer-docker-demo.log; then
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          lines = Path("/tmp/omicsplorer-docker-demo.log").read_text(
+              encoding="utf-8", errors="replace"
+          ).splitlines()[-100:]
+          excerpt = "\n".join(lines)
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary_path.open("a", encoding="utf-8") as summary:
+              summary.write("## Synthetic Docker demo failure tail\n\n```text\n")
+              summary.write(excerpt)
+              summary.write("\n```\n")
+          escaped = excerpt.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=Synthetic Docker demo failed::{escaped}")
+          PY
+          exit 1
 
       - name: Verify application path and synthetic corpus
         shell: bash
