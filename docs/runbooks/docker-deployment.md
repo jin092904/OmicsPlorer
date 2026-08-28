@@ -48,6 +48,12 @@ The default configuration uses one Ollama endpoint. Model downloads, memory use,
 
 Large corpora, database snapshots, search-index snapshots, and model blobs are intentionally excluded from Git. Restore them using the database or index vendor's supported snapshot mechanism; never bind-mount a live production data directory into this local stack.
 
+The reference Compose file pins PostgreSQL 18 and mounts its named volume at
+`/var/lib/postgresql`, which is the data-volume target used by the official
+PostgreSQL 18 image. Do not attach a PostgreSQL 17-or-earlier data volume to this
+service and expect an in-place upgrade. Use PostgreSQL's supported dump/restore
+or `pg_upgrade` procedure and verify a backup before changing major versions.
+
 ## Production boundary
 
 Before exposing any service beyond loopback, independently configure and test:
