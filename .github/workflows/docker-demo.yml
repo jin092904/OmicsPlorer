@@ -60,8 +60,17 @@ jobs:
 
           lines = Path("/tmp/omicsplorer-docker-demo.log").read_text(
               encoding="utf-8", errors="replace"
-          ).splitlines()[-100:]
-          excerpt = "\n".join(lines)
+          ).splitlines()
+          error_terms = (
+              "error", "failed", "failure", "no space", "denied", "canceled", "exit code"
+          )
+          progress_terms = (
+              "Downloading", "Extracting", "Pull complete", "Pulling fs layer", "Waiting"
+          )
+          errors = [line for line in lines if any(term in line.lower() for term in error_terms)]
+          context = [line for line in lines if not any(term in line for term in progress_terms)][-60:]
+          excerpt = "Detected error lines:\n" + "\n".join(errors[-30:])
+          excerpt += "\n\nFinal non-progress context:\n" + "\n".join(context)
           summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
           with summary_path.open("a", encoding="utf-8") as summary:
               summary.write("## Synthetic Docker demo failure tail\n\n```text\n")
