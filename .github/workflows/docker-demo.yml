@@ -1,0 +1,101 @@
+name: docker-demo
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/docker-demo.yml"
+      - "apps/**"
+      - "infra/**"
+      - "packages/**"
+      - "scripts/docker-package.sh"
+      - "Makefile"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/docker-demo.yml"
+      - "apps/**"
+      - "infra/**"
+      - "packages/**"
+      - "scripts/docker-package.sh"
+      - "Makefile"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-demo-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Prepare disposable local configuration
+        shell: bash
+        run: |
+          cp infra/compose/.env.example infra/compose/.env
+          postgres_password=$(openssl rand -hex 32)
+          app_password=$(openssl rand -hex 32)
+          sed -i "s/replace-with-a-long-random-value/${postgres_password}/" infra/compose/.env
+          sed -i "s/replace-with-another-long-random-value/${app_password}/" infra/compose/.env
+
+      - name: Validate Compose profiles
+        run: make docker-validate
+
+      - name: Build and start the synthetic demo
+        run: make docker-demo
+
+      - name: Verify application path and synthetic corpus
+        shell: bash
+        run: |
+          curl --fail --silent --show-error \
+            --retry 20 --retry-delay 2 --retry-all-errors \
+            http://127.0.0.1:8000/api/v1/health > /tmp/omicsplorer-health.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("/tmp/omicsplorer-health.json").read_text())
+          assert payload == {"status": "ok"}, payload
+          PY
+
+          curl --fail --silent --show-error \
+            --retry 20 --retry-delay 2 --retry-all-errors \
+            http://127.0.0.1:3000/ > /dev/null
+
+          demo_count=$(docker compose --env-file infra/compose/.env \
+            -f infra/compose/docker-compose.yml exec -T postgres \
+            psql -U genofinder -d genofinder -Atc \
+            "SELECT count(*) FROM datasets WHERE source_db = 'DEMO'")
+          test "${demo_count}" = "12"
+
+          curl --fail --silent --show-error \
+            -H "Content-Type: application/json" \
+            -H "X-Eval-Mode: 1" \
+            -d '{"query_text":"pancreatic","mode":"bm25_only","page_size":5}' \
+            http://127.0.0.1:8000/api/v1/search > /tmp/omicsplorer-search.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("/tmp/omicsplorer-search.json").read_text())
+          results = payload.get("results", [])
+          assert results, payload
+          assert any(item.get("source_db") == "DEMO" for item in results), results
+          PY
+
+      - name: Show container logs after failure
+        if: failure()
+        run: |
+          docker compose --env-file infra/compose/.env \
+            -f infra/compose/docker-compose.yml ps
+          docker compose --env-file infra/compose/.env \
+            -f infra/compose/docker-compose.yml logs --no-color --tail=200
+
+      - name: Stop the synthetic demo
+        if: always()
+        run: make down
