@@ -43,6 +43,23 @@ The detailed publication boundary is in [`docs/publication-boundary.md`](docs/pu
 
 The current audit exception and its review condition are recorded in [`docs/dependency-audit-exceptions.md`](docs/dependency-audit-exceptions.md).
 
+## Frozen-evaluation trace
+
+`POST /api/v1/search` requests carrying `X-Eval-Mode: 1` receive an additive
+`evaluation_trace` with the requested and effective retrieval modes, component
+states, shared shortcut/boost states, and fallback events. Ordinary product
+requests omit this field. This trace is execution evidence; it does not by
+itself establish retrieval quality.
+
+For a frozen run, mount the completed `effective-server-config.json` read-only
+into the API container and set `EFFECTIVE_SERVER_CONFIG_PATH` to its in-container
+path. The API hashes the parsed JSON using the reproducibility package's
+canonical JSON rule. If the file is absent or invalid, the trace contains a null
+configuration digest and the offline validator must reject the observation.
+The configuration, deployment, corpus, and model evidence still require
+independent freezing and validation in the
+[reproducibility repository](https://github.com/jin092904/omicsplorer-reproducibility).
+
 ## Security
 
 Do not commit `.env` files, database snapshots, user queries, credentials, or generated production data. Please report suspected vulnerabilities through GitHub's private vulnerability reporting flow described in [`SECURITY.md`](SECURITY.md).

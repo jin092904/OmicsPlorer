@@ -17,6 +17,13 @@ This repository is the evolving application source. The separate reproducibility
 - Aggregated result tables, statistical analysis, and figure-generation inputs
 - A manifest linking an evaluation to an exact source commit, configuration, corpus snapshot, and model identifiers
 
+The application exposes a per-request effective-path trace only when the caller
+sets `X-Eval-Mode: 1`. A frozen deployment must mount its completed canonical
+server configuration and set `EFFECTIVE_SERVER_CONFIG_PATH`; a missing or
+unreadable file produces no eligible configuration digest. The trace contract
+and CI success are implementation evidence, not proof that a particular live
+deployment or frozen run used that path.
+
 ## Not published by default
 
 - Credentials and `.env` files
