@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,6 +14,23 @@ from src.services import search as search_service
 class _FakeQdrant:
     def __init__(self, **_: Any) -> None:
         pass
+
+    async def query_points(self, **_: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            points=[
+                SimpleNamespace(
+                    id="00000000-0000-0000-0000-000000000001",
+                    score=0.8,
+                    payload={
+                        "source_db": "GEO",
+                        "source_id": "GSE1",
+                        "title": "synthetic test record",
+                        "organism_taxid": [9606],
+                        "access_type": "open",
+                    },
+                )
+            ]
+        )
 
     async def close(self) -> None:
         pass
@@ -71,6 +89,99 @@ def test_trace_state_derives_effective_mode_from_used_components() -> None:
 
     trace.dense = "failed"
     assert trace.effective_mode() == "bm25_rerank"
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_components"),
+    [
+        ("bm25_only", ("used", "not_requested", "not_requested")),
+        ("dense_only", ("not_requested", "used", "not_requested")),
+        ("rrf", ("used", "used", "not_requested")),
+        ("rrf_rerank", ("used", "used", "used")),
+    ],
+)
+async def test_each_requested_mode_records_its_complete_effective_path(
+    mode: str,
+    expected_components: tuple[str, str, str],
+    effective_config: str,
+    monkeypatch,
+) -> None:
+    async def fake_embedding(_: str) -> list[float]:
+        return [0.0] * 1024
+
+    import src.services.reranker as reranker_service
+
+    monkeypatch.setattr(search_service, "AsyncQdrantClient", _FakeQdrant)
+    monkeypatch.setattr(search_service, "AsyncOpenSearch", _FakeOpenSearch)
+    monkeypatch.setattr(search_service, "_embed_query", fake_embedding)
+    monkeypatch.setattr(reranker_service, "is_available", lambda: True)
+    monkeypatch.setattr(reranker_service, "rerank_top_n", lambda: 20)
+    monkeypatch.setattr(
+        reranker_service,
+        "rerank_pairs",
+        lambda _query, docs: [1.25] * len(docs),
+    )
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("ALEMBIC_DATABASE_URL", raising=False)
+    monkeypatch.setenv("QUERY_UNDERSTANDING_ENABLED", "0")
+
+    response = await search_service.hybrid_search(
+        {
+            "query_text": "human transcriptome",
+            "mode": mode,
+            "page": 1,
+            "page_size": 20,
+            "auto_translate": True,
+            "_evaluation_trace": True,
+        }
+    )
+
+    trace = response["evaluation_trace"]
+    assert trace["requested_mode"] == mode
+    assert trace["effective_mode"] == mode
+    assert trace["configuration_sha256"] == effective_config
+    assert trace["fallbacks"] == []
+    assert (
+        trace["components"]["lexical"],
+        trace["components"]["dense"],
+        trace["components"]["reranker"],
+    ) == expected_components
+
+
+async def test_korean_query_records_successful_translation(
+    effective_config: str,
+    monkeypatch,
+) -> None:
+    async def fake_translation(_: str, *, target_lang: str) -> str:
+        assert target_lang == "en"
+        return "human lung transcriptome"
+
+    import src.services.translate as translate_service
+
+    monkeypatch.setattr(search_service, "AsyncQdrantClient", _FakeQdrant)
+    monkeypatch.setattr(search_service, "AsyncOpenSearch", _FakeOpenSearch)
+    monkeypatch.setattr(translate_service, "translate_query", fake_translation)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("ALEMBIC_DATABASE_URL", raising=False)
+    monkeypatch.setenv("QUERY_UNDERSTANDING_ENABLED", "0")
+
+    response = await search_service.hybrid_search(
+        {
+            "query_text": "사람 폐 전사체",
+            "mode": "bm25_only",
+            "page": 1,
+            "page_size": 20,
+            "auto_translate": True,
+            "_evaluation_trace": True,
+        }
+    )
+
+    assert response["original_query"] == "사람 폐 전사체"
+    assert response["translated_query"] == "human lung transcriptome"
+    trace = response["evaluation_trace"]
+    assert trace["components"]["translation"] == "used"
+    assert trace["configuration_sha256"] == effective_config
+    assert trace["fallbacks"] == []
 
 
 async def test_bm25_eval_trace_records_effective_path(
