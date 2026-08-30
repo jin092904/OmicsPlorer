@@ -41,6 +41,9 @@ Manuscript-specific protocols, frozen query sets, result tables, and figure-gene
 
 The detailed publication boundary is in [`docs/publication-boundary.md`](docs/publication-boundary.md).
 
+The GPB Application Note source-release procedure and claim boundary are recorded in
+[`docs/gpb-public-release.md`](docs/gpb-public-release.md).
+
 The current audit exception and its review condition are recorded in [`docs/dependency-audit-exceptions.md`](docs/dependency-audit-exceptions.md).
 
 ## Frozen-evaluation trace
