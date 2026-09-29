@@ -4,8 +4,17 @@ from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from src.indexer.embeddings import _payload
-from src.indexer.lexical import INDEX_BODY, INDEX_NAME, _doc, ensure_index
+from src.indexer.lexical import (
+    INDEX_BODY,
+    INDEX_NAME,
+    LexicalIndexMappingError,
+    _doc,
+    ensure_index,
+    recreate_index,
+)
 
 
 def _row() -> dict:
@@ -62,3 +71,38 @@ async def test_existing_opensearch_index_receives_missing_lineage_mapping() -> N
             }
         },
     )
+
+
+async def test_existing_index_with_text_mapped_filter_fields_is_rejected() -> None:
+    # Dynamic mapping stores strings as analyzed text, where term filters match nothing.
+    text_field = {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}}
+    indices = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        get_mapping=AsyncMock(
+            return_value={INDEX_NAME: {"mappings": {"properties": {
+                "source_db": text_field,
+                "disease_ids": text_field,
+                "title": {"type": "text"},
+            }}}}
+        ),
+        put_mapping=AsyncMock(),
+    )
+    client = SimpleNamespace(indices=indices)
+
+    with pytest.raises(LexicalIndexMappingError, match="disease_ids=text, source_db=text"):
+        await ensure_index(client)
+    indices.put_mapping.assert_not_awaited()
+
+
+async def test_recreate_index_replaces_existing_index_with_expected_mapping() -> None:
+    indices = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        delete=AsyncMock(),
+        create=AsyncMock(),
+    )
+    client = SimpleNamespace(indices=indices)
+
+    await recreate_index(client)
+
+    indices.delete.assert_awaited_once_with(index=INDEX_NAME)
+    indices.create.assert_awaited_once_with(index=INDEX_NAME, body=INDEX_BODY)

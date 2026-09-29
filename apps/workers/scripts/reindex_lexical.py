@@ -1,20 +1,32 @@
-"""Create/update the OpenSearch lexical index from PostgreSQL without an embedding model."""
+"""Create/update the OpenSearch lexical index from PostgreSQL without an embedding model.
+
+``--recreate`` rebuilds the index with the mapping in ``src/indexer/lexical.py``; use it when
+``ensure_index`` reports mismatched field types.
+"""
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 
 from sqlalchemy import text
 
 from src.db import get_engine
-from src.indexer.lexical import ensure_index, get_os_client, upsert_many
+from src.indexer.lexical import ensure_index, get_os_client, recreate_index, upsert_many
 
 
 async def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--recreate", action="store_true",
+                        help="delete and recreate the index with the expected mapping first")
+    args = parser.parse_args()
     engine = get_engine()
     client = get_os_client()
     try:
-        await ensure_index(client)
+        if args.recreate:
+            await recreate_index(client)
+        else:
+            await ensure_index(client)
         async with engine.connect() as connection:
             result = await connection.execute(text("""
                 SELECT id, source_db, source_id, title, abstract, modality, organism_taxid,

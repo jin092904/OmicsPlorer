@@ -273,8 +273,46 @@ async def test_bm25_eval_trace_records_effective_path(
             "accession_shortcut": {"enabled": True, "applied": False},
             "cardinality_boost": {"enabled": True, "applied": False},
         },
+        "candidate_counts": {"lexical": 1, "dense": None},
         "fallbacks": [],
     }
+
+
+class _EmptyOpenSearch(_FakeOpenSearch):
+    async def search(self, **_: Any) -> dict[str, Any]:
+        return {"hits": {"total": {"value": 0}, "hits": []}}
+
+
+async def test_lexical_call_without_candidates_is_visible_in_trace(
+    effective_config: str,
+    monkeypatch,
+) -> None:
+    # A filter that matches nothing still leaves the lexical call "used".
+    async def fake_embedding(_: str) -> list[float]:
+        return [0.0] * 1024
+
+    monkeypatch.setattr(search_service, "AsyncQdrantClient", _FakeQdrant)
+    monkeypatch.setattr(search_service, "AsyncOpenSearch", _EmptyOpenSearch)
+    monkeypatch.setattr(search_service, "_embed_query", fake_embedding)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("ALEMBIC_DATABASE_URL", raising=False)
+    monkeypatch.setenv("QUERY_UNDERSTANDING_ENABLED", "0")
+
+    response = await search_service.hybrid_search(
+        {
+            "query_text": "human transcriptome",
+            "mode": "rrf",
+            "page": 1,
+            "page_size": 20,
+            "auto_translate": True,
+            "source_db": ["GEO"],
+            "_evaluation_trace": True,
+        }
+    )
+
+    trace = response["evaluation_trace"]
+    assert trace["components"]["lexical"] == "used"
+    assert trace["candidate_counts"] == {"lexical": 0, "dense": 1}
 
 
 async def test_dense_failure_is_not_relabelled_as_requested_mode(
