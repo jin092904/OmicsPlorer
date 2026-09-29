@@ -65,6 +65,15 @@ RETURNING id
 """)
 
 
+# Demo rows from an earlier load whose Series this run could not fetch or excluded. They are
+# reported, not deleted, because other tables may already refer to them.
+EARLIER_ROWS_SQL = text("""
+SELECT count(*) FROM datasets
+WHERE source_db = 'GEO' AND source_id = ANY(:accessions)
+  AND raw_metadata->>'demo_profile' = :profile
+""")
+
+
 def demo_id(accession: str) -> uuid.UUID:
     """Deterministic identifier so PostgreSQL rows and Qdrant points always agree."""
     return uuid.uuid5(ID_NAMESPACE, accession)
@@ -77,12 +86,13 @@ def gds_uid(accession: str) -> str:
     return str(200_000_000 + int(accession[3:]))
 
 
-def read_asset(path: Path, manifest: Path | None) -> list[dict[str, Any]]:
-    if manifest is not None and manifest.exists():
-        expected = json.loads(manifest.read_text())["sha256"]
-        actual = hashlib.sha256(path.read_bytes()).hexdigest()
-        if actual != expected:
-            raise SystemExit(f"demo asset checksum mismatch: expected {expected}, got {actual}")
+def read_asset(path: Path, manifest: Path) -> list[dict[str, Any]]:
+    if not manifest.is_file():
+        raise SystemExit(f"demo asset manifest not found: {manifest}")
+    expected = json.loads(manifest.read_text())["sha256"]
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual != expected:
+        raise SystemExit(f"demo asset checksum mismatch: expected {expected}, got {actual}")
     with gzip.open(path, "rt", encoding="utf-8") as handle:
         return [json.loads(line) for line in handle if line.strip()]
 
@@ -256,7 +266,8 @@ async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--asset", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, default=None,
-                        help="manifest JSON whose sha256 the asset must match")
+                        help="manifest JSON whose sha256 the asset must match "
+                             "(default: the .manifest.json next to the asset)")
     parser.add_argument("--ncbi-batch", type=int, default=200)
     parser.add_argument("--max-missing", type=int, default=25,
                         help="stop before writing if more records than this cannot be loaded because "
@@ -283,6 +294,9 @@ async def main() -> int:
     engine = get_engine()
     try:
         async with engine.begin() as connection:
+            earlier_rows = (await connection.execute(
+                EARLIER_ROWS_SQL, {"accessions": missing + excluded, "profile": DEMO_PROFILE},
+            )).scalar_one()
             for record, text in kept:
                 row = row_for(record, text)
                 row_id = (await connection.execute(INSERT_SQL, row)).scalar_one_or_none()
@@ -317,6 +331,7 @@ async def main() -> int:
         "excluded_without_pubmed_abstract": excluded,
         "missing_on_ncbi": len(missing),
         "missing_examples": missing[:10],
+        "earlier_demo_rows_not_refreshed": earlier_rows,
         "qdrant_collection": COLLECTION_NAME,
         "fetched_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
     }))

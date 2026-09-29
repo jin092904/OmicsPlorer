@@ -56,7 +56,12 @@ to lexical candidates. Query translation, query understanding, and AI Pick are o
 designed for English queries.
 
 Everything runs on CPU, and no GPU is needed. On the 4-vCPU runner used for CI, a search took
-11–15 s once the models had loaded.
+11–15 s once the models had loaded; a second run on the same runner type was about ten times
+slower, so search time depends on the host.
+
+Running the loader again updates the rows it wrote before. A Series that the new run cannot load,
+because NCBI no longer returns it or its PubMed abstract is unavailable, keeps the row from the
+earlier load; the loader reports how many such rows remain as `earlier_demo_rows_not_refreshed`.
 
 ## Terms
 

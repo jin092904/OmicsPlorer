@@ -92,18 +92,18 @@ class LexicalIndexMappingError(RuntimeError):
 
 
 def keyword_mapping_mismatches(properties: dict[str, Any]) -> dict[str, str]:
-    """keyword 여야 할 필드를 다른 타입(예: dynamic mapping 의 text)으로 가진 필드 목록.
+    """keyword 여야 할 필드를 다른 타입(예: dynamic mapping 의 text, object)으로 가진 필드 목록.
 
     text 필드에서는 ``GEO``·``MONDO:0004975`` 같은 term 필터가 어떤 문서와도 맞지 않아,
-    필터를 건 어휘 검색이 조용히 0건이 된다.
+    필터를 건 어휘 검색이 조용히 0건이 된다. 아직 매핑에 없는 필드는 여기서 보지 않는다.
     """
     expected = INDEX_BODY["mappings"]["properties"]
     return {
-        name: str(properties[name].get("type"))
+        name: str(properties[name].get("type", "object"))
         for name, definition in expected.items()
         if definition.get("type") == "keyword"
         and name in properties
-        and properties[name].get("type") not in (None, "keyword")
+        and properties[name].get("type") != "keyword"
     }
 
 
@@ -121,9 +121,10 @@ async def ensure_index(client: AsyncOpenSearch) -> None:
                 "keyword, so lexical filters on them match nothing. Rebuild it with "
                 "`python scripts/reindex_lexical.py --recreate`."
             )
+        # 빠진 필드를 문서보다 먼저 선언해야 dynamic mapping 이 text 로 만들지 않는다.
         missing = {
             name: definition
-            for name, definition in LINEAGE_MAPPING_FIELDS.items()
+            for name, definition in INDEX_BODY["mappings"]["properties"].items()
             if name not in properties
         }
         if missing:
@@ -131,7 +132,9 @@ async def ensure_index(client: AsyncOpenSearch) -> None:
                 index=INDEX_NAME,
                 body={"properties": missing},
             )
-            logger.info("added lineage fields to OpenSearch index %s", INDEX_NAME)
+            logger.info(
+                "added fields to OpenSearch index %s: %s", INDEX_NAME, ", ".join(sorted(missing))
+            )
         return
     await client.indices.create(index=INDEX_NAME, body=INDEX_BODY)
     logger.info("created opensearch index %s", INDEX_NAME)

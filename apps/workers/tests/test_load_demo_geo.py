@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import base64
+import gzip
+import hashlib
+import json
 import struct
 import sys
 from pathlib import Path
@@ -161,3 +164,18 @@ async def test_esummary_fails_on_unexpected_answer(monkeypatch) -> None:
         await loader._esummary(client, ["GSE1"], None)
     assert client.calls == 4
 
+
+def test_read_asset_requires_the_manifest(tmp_path) -> None:
+    asset = tmp_path / "demo.jsonl.gz"
+    with gzip.open(asset, "wt", encoding="utf-8") as handle:
+        handle.write('{"source_id": "GSE1"}\n')
+    with pytest.raises(SystemExit, match="manifest not found"):
+        loader.read_asset(asset, tmp_path / "missing.manifest.json")
+
+    manifest = tmp_path / "demo.manifest.json"
+    manifest.write_text(json.dumps({"sha256": "0" * 64}))
+    with pytest.raises(SystemExit, match="checksum mismatch"):
+        loader.read_asset(asset, manifest)
+
+    manifest.write_text(json.dumps({"sha256": hashlib.sha256(asset.read_bytes()).hexdigest()}))
+    assert loader.read_asset(asset, manifest) == [{"source_id": "GSE1"}]

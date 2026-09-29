@@ -8,30 +8,20 @@ on:
   pull_request:
     paths:
       - ".github/workflows/docker-demo-geo.yml"
-      - "infra/compose/demo-geo/**"
-      - "infra/compose/docker-compose.yml"
-      - "infra/docker/Dockerfile.api"
-      - "infra/docker/Dockerfile.workers"
-      - "apps/api/src/services/reranker.py"
-      - "apps/api/src/services/search.py"
-      - "apps/workers/scripts/load_demo_geo.py"
-      - "apps/workers/scripts/reindex_lexical.py"
-      - "apps/workers/src/indexer/**"
+      - "apps/api/**"
+      - "apps/workers/**"
+      - "apps/web/**"
+      - "infra/**"
       - "scripts/docker-package.sh"
       - "Makefile"
   push:
     branches: [main]
     paths:
       - ".github/workflows/docker-demo-geo.yml"
-      - "infra/compose/demo-geo/**"
-      - "infra/compose/docker-compose.yml"
-      - "infra/docker/Dockerfile.api"
-      - "infra/docker/Dockerfile.workers"
-      - "apps/api/src/services/reranker.py"
-      - "apps/api/src/services/search.py"
-      - "apps/workers/scripts/load_demo_geo.py"
-      - "apps/workers/scripts/reindex_lexical.py"
-      - "apps/workers/src/indexer/**"
+      - "apps/api/**"
+      - "apps/workers/**"
+      - "apps/web/**"
+      - "infra/**"
       - "scripts/docker-package.sh"
       - "Makefile"
 
@@ -158,7 +148,8 @@ jobs:
                   headers={"Content-Type": "application/json", "X-Eval-Mode": "1"},
               )
               started = time.monotonic()
-              payload = json.load(urllib.request.urlopen(request, timeout=900))
+              # A search that takes this long indicates a stalled host; fail and show the logs.
+              payload = json.load(urllib.request.urlopen(request, timeout=300))
               return payload, time.monotonic() - started
 
           queries = [
@@ -182,7 +173,7 @@ jobs:
                                      if item["score_breakdown"].get("lexical") is not None)
                   print(f"{elapsed:6.1f}s {trace['effective_mode']} candidates lexical={counts['lexical']} "
                         f"dense={counts['dense']} lexical-scored {with_lexical}/{len(results)} "
-                        f"filter={body.get('source_db')} {query[:50]}")
+                        f"filter={body.get('source_db')} {query[:50]}", flush=True)
                   assert trace["effective_mode"] == "rrf_rerank", trace
                   assert components["lexical"] == components["dense"] == components["reranker"] == "used", trace
                   # "used" only means the call succeeded; both retrievers must also contribute.
@@ -227,6 +218,13 @@ jobs:
           PY
           {
             echo
+            echo "### Host memory and swap at the end"
+            echo
+            echo '```text'
+            free -m
+            grep -E '^(pswpin|pswpout) ' /proc/vmstat
+            echo '```'
+            echo
             echo "### Docker disk use"
             echo
             echo '```text'
@@ -235,7 +233,7 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Show container logs after failure
-        if: failure()
+        if: failure() || cancelled()
         run: |
           tail -n 120 /tmp/omicsplorer-demo-geo.log || true
           docker compose --env-file infra/compose/.env \

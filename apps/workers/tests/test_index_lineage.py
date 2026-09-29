@@ -50,17 +50,24 @@ def test_opensearch_document_and_mapping_retain_row_lineage() -> None:
     assert properties["build_stage"] == {"type": "keyword"}
 
 
-async def test_existing_opensearch_index_receives_missing_lineage_mapping() -> None:
-    indices = SimpleNamespace(
+def _existing_index(properties: dict) -> SimpleNamespace:
+    return SimpleNamespace(
         exists=AsyncMock(return_value=True),
-        get_mapping=AsyncMock(
-            return_value={INDEX_NAME: {"mappings": {"properties": {"dataset_id": {}}}}}
-        ),
+        get_mapping=AsyncMock(return_value={INDEX_NAME: {"mappings": {"properties": properties}}}),
         put_mapping=AsyncMock(),
     )
-    client = SimpleNamespace(indices=indices)
 
-    await ensure_index(client)
+
+async def test_existing_opensearch_index_receives_missing_lineage_mapping() -> None:
+    expected = INDEX_BODY["mappings"]["properties"]
+    current = {
+        name: definition
+        for name, definition in expected.items()
+        if name not in ("extraction_lineage_id", "build_stage")
+    }
+    indices = _existing_index(current)
+
+    await ensure_index(SimpleNamespace(indices=indices))
 
     indices.put_mapping.assert_awaited_once_with(
         index=INDEX_NAME,
@@ -71,6 +78,28 @@ async def test_existing_opensearch_index_receives_missing_lineage_mapping() -> N
             }
         },
     )
+
+
+async def test_missing_filter_field_is_declared_as_keyword_before_indexing() -> None:
+    # Without the declaration, the first document would map source_db dynamically as text.
+    expected = INDEX_BODY["mappings"]["properties"]
+    indices = _existing_index({name: d for name, d in expected.items() if name != "source_db"})
+
+    await ensure_index(SimpleNamespace(indices=indices))
+
+    indices.put_mapping.assert_awaited_once_with(
+        index=INDEX_NAME, body={"properties": {"source_db": {"type": "keyword"}}}
+    )
+
+
+async def test_object_mapped_filter_field_is_rejected() -> None:
+    expected = INDEX_BODY["mappings"]["properties"]
+    current = dict(expected, source_db={"properties": {"name": {"type": "text"}}})
+    indices = _existing_index(current)
+
+    with pytest.raises(LexicalIndexMappingError, match="source_db=object"):
+        await ensure_index(SimpleNamespace(indices=indices))
+    indices.put_mapping.assert_not_awaited()
 
 
 async def test_existing_index_with_text_mapped_filter_fields_is_rejected() -> None:
