@@ -16,6 +16,43 @@ Validate the resolved configuration before starting containers:
 make docker-validate
 ```
 
+## Run the real-data GEO demo
+
+```bash
+make docker-demo-geo
+```
+
+The command runs these steps in order:
+
+1. It checks the SHA-256 checksum of `infra/compose/demo-geo/omicsplorer-demo-geo-v1.jsonl.gz`
+   against its manifest.
+2. It builds the images, starts the stores, and applies the database migrations.
+3. It downloads `qwen3-embedding:8b` into the Ollama volume and compares the downloaded build with
+   the one recorded in the manifest. If the builds differ, it prints a warning and continues.
+4. It downloads `Qwen/Qwen3-Reranker-0.6B` at the revision pinned in
+   `apps/api/src/services/reranker.py` into the `hf_cache` volume, then loads it once.
+5. It loads the 5,000 records (`demo-geo-load`). Titles and summaries come from NCBI E-utilities,
+   and the stored vectors are written to Qdrant. Set `NCBI_API_KEY` in `.env` to use NCBI's
+   higher request limit.
+6. It builds the lexical index (`demo-geo-index`).
+7. It starts the API and web containers and runs one search with the GEO source filter. The
+   search prints the retrieval components and candidate counts. The command stops with an error
+   unless lexical retrieval, vector retrieval, and reranking all contributed.
+
+Running the command again updates the demo rows in place. The loader never overwrites a row that
+it did not create. To verify a search by hand:
+
+```bash
+curl -fsS -H 'Content-Type: application/json' -H 'X-Eval-Mode: 1' \
+  -d '{"query_text": "Single-cell RNA sequencing of Alzheimer disease microglia", "page_size": 10}' \
+  http://127.0.0.1:8000/api/v1/search | python3 -c 'import json,sys; t=json.load(sys.stdin)["evaluation_trace"]; print(t["effective_mode"], t["components"], t["candidate_counts"])'
+```
+
+The `components` entries for lexical, dense, and reranker should all be `used`, and both
+`candidate_counts` should be above zero. The trace also lists `configuration_missing_or_invalid`
+under `fallbacks`. That entry only means that no frozen-evaluation configuration file is mounted,
+and it does not affect search.
+
 ## Run the synthetic demo
 
 ```bash
@@ -30,7 +67,8 @@ The demo seed contains twelve synthetic records marked with `source_db=DEMO` and
 
 ```bash
 make dev             # build and start the default stack
-make docker-models   # download the configured embedding model
+make docker-demo-geo # real-data GEO demo (see above)
+make docker-models   # download the embedding model and the reranker
 make docker-ingest   # start harvesting worker and scheduler profiles
 make docker-sol4-shadow  # run the maintenance path without dataset DB writes
 make ps
@@ -44,7 +82,39 @@ The `sol4-commit` Compose profile enables a maintenance command that writes extr
 
 ## Models and resources
 
-The default configuration uses one Ollama endpoint. Model downloads, memory use, warm-up time, and inference latency depend on the selected model and host. The image and model identifiers used in a manuscript run must be recorded separately from this runbook.
+The default configuration uses one Ollama endpoint for embeddings. The reranker runs inside the API
+container and reads its weights from the `hf_cache` volume. `make docker-models` fills that volume,
+and without it the API tries to download the weights at the first search. The default reranker is
+`Qwen/Qwen3-Reranker-0.6B` at a pinned Hugging Face revision. If you set `RERANKER_MODEL` to
+another model, also set `RERANKER_REVISION` or leave it blank. Model downloads, memory use, warm-up
+time, and inference latency depend on the selected model and host. The image and model identifiers
+used in a manuscript run must be recorded separately from this runbook.
+
+## Lexical index mapping
+
+Source and facet filters (`source_db`, `modality`, `disease_ids`, `tissue_ids`, `cell_type_ids`,
+and others) use exact-match `term` queries. They only work when the OpenSearch index maps these
+fields as `keyword`, as defined in `apps/workers/src/indexer/lexical.py`. If an index is created
+implicitly, for example because a document was written before the index existed, OpenSearch maps
+them as analyzed `text`. Every filtered lexical query then returns nothing, while vector search
+still answers.
+
+`ensure_index` now stops with `LexicalIndexMappingError` when it finds such an index. To rebuild it
+with the expected mapping, run:
+
+```bash
+docker compose --env-file infra/compose/.env -f infra/compose/docker-compose.yml \
+  --profile demo-geo run --rm demo-geo-index scripts/reindex_lexical.py --recreate
+```
+
+For a full corpus, run the same script through the maintenance service:
+
+```bash
+docker compose --env-file infra/compose/.env -f infra/compose/docker-compose.yml \
+  --profile maintenance run --rm reindex-all scripts/reindex_lexical.py --recreate
+```
+
+Lexical search is empty until the rebuild finishes.
 
 Large corpora, database snapshots, search-index snapshots, and model blobs are intentionally excluded from Git. Restore them using the database or index vendor's supported snapshot mechanism; never bind-mount a live production data directory into this local stack.
 

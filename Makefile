@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: help dev down logs ps docker-validate docker-build docker-demo docker-models docker-ingest docker-sol4-shadow test test-api test-workers test-web lint lint-py lint-js fmt security-scan migrate alembic-rev clean
+.PHONY: help dev down logs ps docker-validate docker-build docker-demo docker-demo-geo docker-models docker-ingest docker-sol4-shadow test test-api test-workers test-web lint lint-py lint-js fmt security-scan migrate alembic-rev clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -23,6 +23,9 @@ docker-build: ## API/worker/web 이미지 빌드
 
 docker-demo: ## synthetic 12-record demo seed + lexical index + app 기동
 	./scripts/docker-package.sh demo
+
+docker-demo-geo: ## 실데이터 GEO 데모: 공개 GEO Series 5,000건 + 어휘·의미·재순위화 검색
+	./scripts/docker-package.sh demo-geo
 
 docker-models: ## embedding model(Ollama)과 reranker(Hugging Face)를 volume에 pull
 	./scripts/docker-package.sh models
