@@ -129,7 +129,11 @@ services:
       <<: *service-env
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
       RERANKER_TOP_N: ${RERANKER_TOP_N:-20}
-      RERANKER_MODEL: ${RERANKER_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}
+      RERANKER_MODEL: ${RERANKER_MODEL:-Qwen/Qwen3-Reranker-0.6B}
+      # Blank keeps the revision recorded in apps/api/src/services/reranker.py for the default model.
+      RERANKER_REVISION: ${RERANKER_REVISION:-}
+    volumes:
+      - hf_cache:/models/huggingface
     depends_on:
       migrate: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
@@ -237,6 +241,54 @@ services:
     command: ["pull", "${OLLAMA_MODEL_EMBED:-qwen3-embedding:8b}"]
     restart: "no"
 
+  model-pull-reranker:
+    image: omicsplorer-api:${OMICSPLORER_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.api
+    profiles: ["models"]
+    environment:
+      RERANKER_TOP_N: ${RERANKER_TOP_N:-20}
+      RERANKER_MODEL: ${RERANKER_MODEL:-Qwen/Qwen3-Reranker-0.6B}
+      RERANKER_REVISION: ${RERANKER_REVISION:-}
+    volumes:
+      - hf_cache:/models/huggingface
+    entrypoint: ["python", "-m", "src.services.reranker"]
+    restart: "no"
+
+  # Real-data GEO demo (infra/compose/demo-geo); titles and summaries come from NCBI at load time.
+  demo-geo-load:
+    image: omicsplorer-workers:${OMICSPLORER_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.workers
+    profiles: ["demo-geo"]
+    environment:
+      <<: *service-env
+      NCBI_API_KEY: ${NCBI_API_KEY:-}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      qdrant: {condition: service_healthy}
+    volumes:
+      - ./demo-geo:/demo:ro
+    entrypoint: ["python"]
+    command: ["scripts/load_demo_geo.py", "--asset", "/demo/omicsplorer-demo-geo-v1.jsonl.gz", "--manifest", "/demo/omicsplorer-demo-geo-v1.manifest.json"]
+    restart: "no"
+
+  demo-geo-index:
+    image: omicsplorer-workers:${OMICSPLORER_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.workers
+    profiles: ["demo-geo"]
+    environment: *service-env
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      opensearch: {condition: service_healthy}
+    entrypoint: ["python"]
+    command: ["scripts/reindex_lexical.py"]
+    restart: "no"
+
   reindex-all:
     image: omicsplorer-workers:${OMICSPLORER_IMAGE_TAG:-local}
     profiles: ["maintenance"]
@@ -290,5 +342,6 @@ volumes:
   qdrant_data:
   opensearch_data:
   ollama_models:
+  hf_cache:
   sol4_logs:
   maintenance_results:

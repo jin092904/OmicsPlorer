@@ -24,3 +24,27 @@ Before publishing the tag:
 
 The synthetic demo confirms one application path with twelve generated records. It is not a
 retrieval-quality evaluation, production-latency measurement, load test, or service-level claim.
+
+## Proposed follow-up tag: `gpb-application-note-public-v2`
+
+`gpb-application-note-public-v1` stays unchanged. The follow-up source tag would add:
+
+- the real-data GEO demo (`make docker-demo-geo`; data card in `infra/compose/demo-geo/README.md`);
+- the reranker default `Qwen/Qwen3-Reranker-0.6B` at the recorded revision, replacing the
+  `ms-marco-MiniLM` default that the v1 Compose file set, and a writable reranker cache for the
+  non-root API container;
+- a lexical-index mapping check (`LexicalIndexMappingError`, `reindex_lexical.py --recreate`) and
+  per-retriever candidate counts in the evaluation trace.
+
+Before publishing it:
+
+1. merge the change into protected `main`;
+2. confirm `ci`, `security-gates`, `docker-demo`, and `docker-demo-geo` succeed for the final
+   commit, and copy the measured resources from the `docker-demo-geo` step summary into the README;
+3. create the annotated tag without moving it later;
+4. clone the tag through the public HTTPS URL and run `make docker-demo-geo`;
+5. publish the GitHub release and archive the exact source tag.
+
+The demo is a deliberately chosen 5,000-record subset for trying the search path. It is not a
+retrieval-quality evaluation, production-latency measurement, or service-level claim.
+

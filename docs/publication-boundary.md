@@ -6,6 +6,7 @@ This repository is the evolving application source. The separate reproducibility
 
 - API, web, worker, indexing, and local-LLM integration source
 - Schema migrations and synthetic demo seed
+- The real-data GEO demo subset in `infra/compose/demo-geo` (see below)
 - Dependency lockfiles and container definitions
 - Operational instructions that apply to the published source snapshot
 
@@ -23,6 +24,20 @@ server configuration and set `EFFECTIVE_SERVER_CONFIG_PATH`; a missing or
 unreadable file produces no eligible configuration digest. The trace contract
 and CI success are implementation evidence, not proof that a particular live
 deployment or frozen run used that path.
+
+## Real-data GEO demo subset
+
+`infra/compose/demo-geo` is a deliberate, reviewed exception to the rule against publishing parts of
+the production database or search index. For 5,000 GEO Series it contains:
+
+- the public accession;
+- the structured fields that OmicsPlorer derived;
+- the stored embedding vector;
+- where the full corpus appended a PubMed abstract, the PubMed ID.
+
+It contains no titles, summaries, abstracts, submitter or contact details, raw submitter metadata,
+or internal identifiers. The loader fetches the text from NCBI on the user's machine. The data card
+in that directory records the selection rule, checksum, embedding-model build, and terms.
 
 ## Not published by default
 

@@ -14,18 +14,78 @@ OmicsPlorer is a self-hostable application for collecting public omics-dataset m
 
 The current implementation combines lexical search, vector retrieval, and optional reranking. Local Ollama endpoints are used for model-backed functions. Whether a particular model or index is suitable depends on the corpus, hardware, and evaluation protocol; this repository does not claim a fixed response time, accuracy, or service-level guarantee.
 
-## Local demo
+## Try it on your computer: real-data GEO demo
 
-Prerequisites are Docker with Compose, enough local storage for the selected images and models, and a host that can run the configured services.
+The GEO demo runs the complete search path on your own computer. The path combines lexical (BM25)
+retrieval, vector retrieval, reciprocal rank fusion, and cross-encoder reranking, and it searches
+5,000 real GEO Series. No OmicsPlorer server is involved. Titles and summaries are downloaded from
+NCBI while the demo is set up.
 
 ```bash
+git clone https://github.com/jin092904/OmicsPlorer.git
+cd OmicsPlorer
 cp infra/compose/.env.example infra/compose/.env
-# Replace both database password placeholders with distinct local values.
-make docker-validate
-make docker-demo
+# Replace both database password placeholders in infra/compose/.env with distinct local values.
+make docker-demo-geo
 ```
 
-The demo inserts twelve synthetic metadata records. It is intended to check the application path, not to measure retrieval quality or production latency. See [`docs/runbooks/docker-deployment.md`](docs/runbooks/docker-deployment.md) for the supported commands and boundaries.
+When the command finishes, open <http://localhost:3000>. Before that, the command runs one search
+and stops with an error unless lexical retrieval, vector retrieval, and reranking all contributed.
+It prints a line such as `First search: 37.0 s; path rrf_rerank; lexical used (200 candidates),
+dense used (200 candidates), reranker used`, followed by the top accessions.
+
+![OmicsPlorer search results in the GEO demo](docs/images/demo-geo-search.png)
+
+*Titles and summaries are hidden in this image because the repository does not redistribute
+them; the running demo shows the text it fetched from NCBI.*
+
+**Requirements.** You need Docker Engine or Docker Desktop with Compose v2, `make`, and an
+internet connection. On Windows, run the commands inside WSL 2. Everything runs on CPU, and no
+GPU is needed. The two models are `qwen3-embedding:8b` through Ollama (4.7 GB) and
+`Qwen/Qwen3-Reranker-0.6B` (1.2 GB).
+
+Plan for 16 GB of RAM and 30 GB of free disk space. With Docker Desktop, give Docker at least
+12 GB of memory, and more if you can. The `docker-demo-geo` workflow measured the following on a
+GitHub-hosted runner with 4 vCPUs and 15 GiB of RAM on 2026-09-29:
+
+| Measure | Value |
+|---|---|
+| First run of `make docker-demo-geo` | 432 s; downloads take longer on a slower connection |
+| Disk space used | 20 GiB (images 12.6 GB, volumes 6.2 GB, build cache 4.6 GB) |
+| Sum of the services' memory peaks | 11.4 GiB (Ollama 5.5, API with the reranker 4.1, OpenSearch 1.5), sampled every 10 s; the peaks need not coincide |
+| Search time | 37 s for the first search, which loads the models; 11–15 s (median 12.6 s) for the next ten. Later runs were much slower (below) |
+
+Search time varied widely between CI runs on runners of the same size. After the models had loaded,
+a search took 11–15 s in the run above, but about 115 s on an Intel Xeon Platinum 8573C runner,
+about 220 s on an AMD EPYC 9V74 runner, and more than 5 minutes in one more run; the first search
+took 37–367 s. Memory peaks were similar and swap was not used, so the host CPU is the likely cause.
+Treat these values as observations, not guarantees. Reranking fewer candidates, for example with
+`RERANKER_TOP_N=10` in `infra/compose/.env`, reduces the work per search but changes the ranking
+from the recorded configuration, which reranks 20.
+
+**Example queries.** The queries below come from the September 2026 blinded assessment. The
+results listed were observed on 2026-09-27 in a native, non-Docker run of the same code and demo
+data. They can shift slightly between machines.
+
+| Query | Examples in the top 10 |
+|---|---|
+| Single-cell RNA sequencing of Alzheimer's disease microglia | GSE98969, GSE229418, GSE271192 |
+| Single-cell RNA-seq of dopaminergic neurons in the substantia nigra in Parkinson's disease | GSE184950, GSE108020, GSE169755 |
+| Paired single-cell transcriptomics of tumor and adjacent normal tissue in hepatocellular carcinoma | GSE189903, GSE326201, GSE233421 |
+| `GSE98969` (accession) | GSE98969 as the first result |
+
+**What the demo is not.** The demo is a deliberately chosen subset. It includes the GEO Series
+judged in that assessment, so its rankings are not comparable with results on the full corpus, and
+it does not measure retrieval quality or production latency. Query translation, AI-assisted
+shortlists, and design analysis require an extraction model that the demo does not install. See
+[`infra/compose/demo-geo/README.md`](infra/compose/demo-geo/README.md) for the contents, the
+selection rule, and the terms of the demo data. See
+[`docs/runbooks/docker-deployment.md`](docs/runbooks/docker-deployment.md) for all commands.
+
+### Synthetic smoke test
+
+`make docker-demo` starts the application with twelve synthetic records and a lexical index
+only. It checks that the containers start and does not download models.
 
 ## Reproducibility material
 
@@ -50,9 +110,12 @@ The current audit exception and its review condition are recorded in [`docs/depe
 
 `POST /api/v1/search` requests carrying `X-Eval-Mode: 1` receive an additive
 `evaluation_trace` with the requested and effective retrieval modes, component
-states, shared shortcut/boost states, and fallback events. Ordinary product
-requests omit this field. This trace is execution evidence; it does not by
-itself establish retrieval quality.
+states, shared shortcut/boost states, the number of candidates each retriever
+returned before fusion (`candidate_counts`), and fallback events. Ordinary
+product requests omit this field. A component state of `used` only means that
+the call succeeded; check `candidate_counts` to see whether it contributed any
+candidates. This trace is execution evidence; it does not by itself establish
+retrieval quality.
 
 For a frozen run, mount the completed `effective-server-config.json` read-only
 into the API container and set `EFFECTIVE_SERVER_CONFIG_PATH` to its in-container
