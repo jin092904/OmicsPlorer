@@ -31,7 +31,7 @@ make docker-demo-geo
 
 When the command finishes, open <http://localhost:3000>. Before that, the command runs one search
 and stops with an error unless lexical retrieval, vector retrieval, and reranking all contributed.
-It prints a line such as `First search: 27.7 s; path rrf_rerank; lexical used (200 candidates),
+It prints a line such as `First search: 37.0 s; path rrf_rerank; lexical used (200 candidates),
 dense used (200 candidates), reranker used`, followed by the top accessions.
 
 ![OmicsPlorer search results in the GEO demo](docs/images/demo-geo-search.png)
@@ -44,10 +44,16 @@ internet connection. On Windows, run the commands inside WSL 2. Everything runs 
 GPU is needed. The two models are `qwen3-embedding:8b` through Ollama (4.7 GB) and
 `Qwen/Qwen3-Reranker-0.6B` (1.2 GB).
 
-The following are planning estimates that have not yet been measured under Docker: 16 GB of RAM
-(give Docker Desktop at least 12 GB), 30 GB of free disk space, and 20–40 minutes for the first
-run, mostly to build images and download models. The `docker-demo-geo` workflow records measured
-values on a GitHub-hosted runner. On CPU, each search takes several seconds to tens of seconds.
+Plan for 16 GB of RAM and 30 GB of free disk space. With Docker Desktop, give Docker at least
+12 GB of memory, and more if you can. The `docker-demo-geo` workflow measured the following on a
+GitHub-hosted runner with 4 vCPUs and 15 GiB of RAM on 2026-09-29:
+
+| Measure | Value |
+|---|---|
+| First run of `make docker-demo-geo` | 432 s; downloads take longer on a slower connection |
+| Disk space used | 20 GiB (images 12.6 GB, volumes 6.2 GB, build cache 4.6 GB) |
+| Peak memory of the running services | 11.4 GiB in total (Ollama 5.5, API with the reranker 4.1, OpenSearch 1.5), sampled every 10 s |
+| Search time | 37 s for the first search, which loads the models; 11–15 s (median 12.6 s) for the next ten |
 
 **Example queries.** The queries below come from the September 2026 blinded assessment. The
 results listed were observed on 2026-09-27 in a native, non-Docker run of the same code and demo

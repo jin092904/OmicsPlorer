@@ -55,8 +55,8 @@ with the mapping in `apps/workers/src/indexer/lexical.py`, so source and facet f
 to lexical candidates. Query translation, query understanding, and AI Pick are off. The demo is
 designed for English queries.
 
-Everything runs on CPU, and no GPU is needed. One search takes several seconds to tens of
-seconds, depending on the machine.
+Everything runs on CPU, and no GPU is needed. On the 4-vCPU runner used for CI, a search took
+11–15 s once the models had loaded.
 
 ## Terms
 
