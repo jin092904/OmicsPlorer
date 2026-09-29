@@ -73,7 +73,7 @@ jobs:
           {
             echo "## GEO demo resources"
             echo
-            echo "Runner: $(nproc) vCPU, $(free -g | awk '/Mem:/ {print $2}') GiB RAM"
+            echo "Runner: $(nproc) vCPU, $(free -g | awk '/Mem:/ {print $2}') GiB RAM, $(lscpu | sed -n 's/^Model name: *//p' | head -1)"
             echo
             echo "- \`make docker-demo-geo\` from a clean runner: $(( SECONDS - start )) s"
             echo "- free disk before: $(cat /tmp/disk-before-gib) GiB; after: $(df -B1G --output=avail / | tail -1) GiB"
@@ -148,17 +148,12 @@ jobs:
                   headers={"Content-Type": "application/json", "X-Eval-Mode": "1"},
               )
               started = time.monotonic()
-              # A search that takes this long indicates a stalled host; fail and show the logs.
-              payload = json.load(urllib.request.urlopen(request, timeout=300))
+              # CPU-only search time varies about tenfold between runners of the same size.
+              payload = json.load(urllib.request.urlopen(request, timeout=900))
               return payload, time.monotonic() - started
 
-          queries = [
-              "Single-cell RNA sequencing of Alzheimer's disease microglia",
-              "Single-cell RNA-seq of dopaminergic neurons in the substantia nigra in Parkinson's disease",
-              "Paired single-cell transcriptomics of tumor and adjacent normal tissue in hepatocellular carcinoma",
-              "Bulk RNA-seq of KRAS-mutant lung adenocarcinoma",
-              "Spatial transcriptomics of triple-negative breast cancer",
-          ]
+          # One query with and without the GEO filter checks the path; speed is recorded, not tested.
+          queries = ["Single-cell RNA sequencing of Alzheimer's disease microglia"]
           seconds = []
           for query in queries:
               for body in ({"query_text": query, "page_size": 10},

@@ -55,10 +55,10 @@ GitHub-hosted runner with 4 vCPUs and 15 GiB of RAM on 2026-09-29:
 | Sum of the services' memory peaks | 11.4 GiB (Ollama 5.5, API with the reranker 4.1, OpenSearch 1.5), sampled every 10 s; the peaks need not coincide |
 | Search time | 37 s for the first search, which loads the models; 11–15 s (median 12.6 s) for the next ten |
 
-A second run on the same runner type was about ten times slower: the first search took 367 s,
-and the run was stopped after the verification searches had not finished within 50 minutes. Memory
-peaks were the same as in the first run, so the cause was not established. Expect search time to
-vary with the host, and treat the values above as one observation, not a guarantee.
+Two later runs on the same runner type were about ten times slower: the first search took 367 s
+in both, and in the third run a single later search did not finish within 5 minutes. Memory peaks
+matched the first run and swap was not used, so the host CPU is the likely cause. Expect search
+time to vary widely between machines, and treat the table as one observation, not a guarantee.
 
 **Example queries.** The queries below come from the September 2026 blinded assessment. The
 results listed were observed on 2026-09-27 in a native, non-Docker run of the same code and demo
