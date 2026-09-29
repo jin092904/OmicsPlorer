@@ -41,6 +41,7 @@ case "${1:-}" in
     ;;
   models)
     compose --profile models run --rm model-pull-embed
+    compose --profile models run --rm model-pull-reranker
     ;;
   ingest)
     compose --profile ingest up -d workers beat

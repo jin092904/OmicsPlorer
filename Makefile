@@ -24,7 +24,7 @@ docker-build: ## API/worker/web 이미지 빌드
 docker-demo: ## synthetic 12-record demo seed + lexical index + app 기동
 	./scripts/docker-package.sh demo
 
-docker-models: ## embedding model을 Ollama volume에 pull
+docker-models: ## embedding model(Ollama)과 reranker(Hugging Face)를 volume에 pull
 	./scripts/docker-package.sh models
 
 docker-ingest: ## incremental harvest worker/beat profile 기동
