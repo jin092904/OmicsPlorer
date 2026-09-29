@@ -55,10 +55,13 @@ GitHub-hosted runner with 4 vCPUs and 15 GiB of RAM on 2026-09-29:
 | Sum of the services' memory peaks | 11.4 GiB (Ollama 5.5, API with the reranker 4.1, OpenSearch 1.5), sampled every 10 s; the peaks need not coincide |
 | Search time | 37 s for the first search, which loads the models; 11–15 s (median 12.6 s) for the next ten |
 
-Two later runs on the same runner type were about ten times slower: the first search took 367 s
-in both, and in the third run a single later search did not finish within 5 minutes. Memory peaks
-matched the first run and swap was not used, so the host CPU is the likely cause. Expect search
-time to vary widely between machines, and treat the table as one observation, not a guarantee.
+Search time varied widely between CI runs on runners of the same size. After the models had loaded,
+a search took 11–15 s in the run above, about 115 s in a later run on an Intel Xeon Platinum 8573C,
+and more than 5 minutes in another; the first search took 37–367 s. Memory peaks were similar and
+swap was not used, so the host CPU is the likely cause. Treat these values as observations, not
+guarantees. Reranking fewer candidates, for example with `RERANKER_TOP_N=10` in
+`infra/compose/.env`, reduces the work per search but changes the ranking from the recorded
+configuration, which reranks 20.
 
 **Example queries.** The queries below come from the September 2026 blinded assessment. The
 results listed were observed on 2026-09-27 in a native, non-Docker run of the same code and demo
