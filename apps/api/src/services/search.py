@@ -882,6 +882,9 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
                         n_samples = p.get("n_samples")
                         if n_samples:
                             meta_lines.append(f"n_samples: {n_samples}")
+                        if not _env_enabled("RERANK_STRUCTURED_FIELDS_ENABLED", default=True):
+                            # Ablation switch (evaluation v2): rerank on title and abstract only.
+                            meta_lines = []
                         meta_block = ("\n" + "\n".join(meta_lines) + "\n") if meta_lines else ""
                         docs.append(f"{title}\n{meta_block}\n{abstract}")
                     # CPU-bound (PyTorch inference). 별도 thread 로 빼서 event loop 비움.
