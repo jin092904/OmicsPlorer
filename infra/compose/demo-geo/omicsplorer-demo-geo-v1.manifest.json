@@ -1,0 +1,30 @@
+{
+  "artifact": "omicsplorer-demo-geo-v1.jsonl.gz",
+  "sha256": "51a3efe849af0b117b3f46fbe0c0eb59fc29ea9d3ffd429becc10e7c3a40120a",
+  "bytes": 20765366,
+  "records": 5000,
+  "records_in_blinded_pool": 683,
+  "judged_geo_series_total": 690,
+  "selection": "judged GEO Series present with a stored vector, then md5(seed || accession) order",
+  "seed": "omicsplorer-demo-geo-v1",
+  "vector": {
+    "dim": 1024,
+    "dtype": "float32 little-endian, base64",
+    "text": "title + summary + library_strategy/platform, as composed by apps/workers/src/indexer/embeddings.py",
+    "model": {
+      "ollama_tag": "qwen3-embedding:8b",
+      "ollama_digest": "64b933495768fbd3b87c20583d379728a07471e0c66733a9df87cd1901b3c44b",
+      "quantization": "Q4_K_M",
+      "ollama_version": "0.23.3"
+    }
+  },
+  "records_with_pubmed_abstract": 744,
+  "excluded": [
+    "titles",
+    "summaries",
+    "abstracts",
+    "raw submitter metadata",
+    "internal dataset identifiers"
+  ],
+  "exported_on": "2026-09-27"
+}

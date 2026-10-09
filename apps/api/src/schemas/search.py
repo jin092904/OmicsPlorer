@@ -148,6 +148,13 @@ class EvaluationComponents(BaseModel):
     cardinality_boost: EvaluationFeatureState
 
 
+class EvaluationCandidateCounts(BaseModel):
+    """Candidates each retriever returned before fusion; null when it did not run."""
+
+    lexical: int | None = None
+    dense: int | None = None
+
+
 class EvaluationTrace(BaseModel):
     """Per-request evidence for fail-closed frozen retrieval evaluation.
 
@@ -160,6 +167,7 @@ class EvaluationTrace(BaseModel):
     effective_mode: str
     configuration_sha256: str | None = None
     components: EvaluationComponents
+    candidate_counts: EvaluationCandidateCounts = EvaluationCandidateCounts()
     fallbacks: list[str] = Field(default_factory=list)
 
 

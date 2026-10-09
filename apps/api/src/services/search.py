@@ -161,6 +161,9 @@ class _EvaluationTraceState:
     accession_shortcut_applied: bool = False
     cardinality_boost_enabled: bool = True
     cardinality_boost_applied: bool = False
+    # Candidates returned before fusion; "used" alone does not show an empty list.
+    lexical_candidates: int | None = None
+    dense_candidates: int | None = None
     fallbacks: list[str] = field(default_factory=list)
 
     def effective_mode(self) -> str:
@@ -196,6 +199,10 @@ class _EvaluationTraceState:
                     "enabled": self.cardinality_boost_enabled,
                     "applied": self.cardinality_boost_applied,
                 },
+            },
+            "candidate_counts": {
+                "lexical": self.lexical_candidates,
+                "dense": self.dense_candidates,
             },
             "fallbacks": list(self.fallbacks),
         }
@@ -718,6 +725,7 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
                 )
                 qd_hits_points = qd_resp.points
                 trace.dense = "used"
+                trace.dense_candidates = len(qd_hits_points)
             except Exception as e:
                 logger.warning("dense retrieval failed (%s) — degrading to lexical/BM25", type(e).__name__)
                 trace.dense = "failed"
@@ -773,6 +781,7 @@ async def hybrid_search(req: dict[str, Any]) -> dict[str, Any]:
                 os_resp = await os_client.search(index=os_index, body=os_body)
                 os_hits = os_resp["hits"]["hits"]
                 trace.lexical = "used"
+                trace.lexical_candidates = len(os_hits)
                 try:
                     os_total = int(os_resp["hits"]["total"]["value"])
                 except (KeyError, TypeError, ValueError):

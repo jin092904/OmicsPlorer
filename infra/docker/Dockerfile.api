@@ -33,13 +33,17 @@ FROM ${PYTHON_IMAGE} AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    HF_HOME=/models/huggingface \
     PATH="/app/.venv/bin:${PATH}"
 
-# non-root user (UID 1001)
+# non-root user (UID 1001). It has no home, so the reranker cache lives in /models/huggingface,
+# made world-writable instead of chowned so that single-map rootless builds still work.
 RUN apt-get -o APT::Sandbox::User=root update \
     && apt-get -o APT::Sandbox::User=root install --no-install-recommends -y ca-certificates libgomp1 \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --no-create-home --shell /usr/sbin/nologin --uid 1001 app
+    && useradd --no-create-home --shell /usr/sbin/nologin --uid 1001 app \
+    && mkdir -p /models/huggingface \
+    && chmod 1777 /models/huggingface
 
 WORKDIR /app
 

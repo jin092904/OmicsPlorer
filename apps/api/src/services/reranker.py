@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 from typing import Any
 
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 # ADR 0006: Qwen3-Reranker-0.6B 으로 교체. ms-marco-MiniLM-L-6-v2 는 deprecated.
 DEFAULT_MODEL = "Qwen/Qwen3-Reranker-0.6B"
+# 평가 기록과 같은 가중치를 받도록 DEFAULT_MODEL 의 Hugging Face revision 을 고정.
+# DEFAULT_MODEL 에만 적용. 바꾸려면 RERANKER_REVISION (예: "main").
+DEFAULT_REVISION = "e61197ed45024b0ed8a2d74b80b4d909f1255473"
 # Qwen3-Reranker-0.6B GPU 기준 ~50ms/pair, CPU ~500ms/pair.
 # top_n 은 RRF 머지 결과의 상위 N개를 rerank. 정확도 vs latency 트레이드오프.
 DEFAULT_TOP_K = 20
@@ -52,15 +56,24 @@ def _get_model() -> Any | None:
             logger.warning("sentence-transformers not installed: %s — reranker disabled", e)
             _model_disabled = True
             return None
-        name = os.environ.get("RERANKER_MODEL", DEFAULT_MODEL)
+        name, revision = configured_model()
         try:
-            _model = CrossEncoder(name)
-            logger.info("loaded cross-encoder %s", name)
+            _model = CrossEncoder(name, revision=revision) if revision else CrossEncoder(name)
+            logger.info("loaded cross-encoder %s (revision=%s)", name, revision or "default")
         except Exception as e:
             logger.warning("CrossEncoder load failed (%s): %s — reranker disabled", name, e)
             _model_disabled = True
             return None
         return _model
+
+
+def configured_model() -> tuple[str, str | None]:
+    """Model name and Hugging Face revision that ``_get_model`` loads."""
+    name = os.environ.get("RERANKER_MODEL") or DEFAULT_MODEL
+    revision = os.environ.get("RERANKER_REVISION") or (
+        DEFAULT_REVISION if name == DEFAULT_MODEL else None
+    )
+    return name, revision
 
 
 def is_available() -> bool:
@@ -93,3 +106,19 @@ def rerank_top_n() -> int:
         except ValueError:
             pass
     return DEFAULT_TOP_K
+
+
+def main() -> int:
+    """모델을 받아 한 번 로드하고 한 쌍을 채점. Compose 의 model-pull-reranker 가 실행."""
+    logging.basicConfig(level=logging.INFO)
+    name, revision = configured_model()
+    scores = rerank_pairs("single-cell RNA-seq", ["single-cell RNA sequencing of mouse brain"])
+    if scores is None:
+        print(f"reranker unavailable: {name} (revision={revision or 'default'})", file=sys.stderr)
+        return 1
+    print(f"reranker ready: {name} (revision={revision or 'default'})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

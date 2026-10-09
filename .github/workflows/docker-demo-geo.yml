@@ -1,0 +1,241 @@
+name: docker-demo-geo
+
+# Runs the real-data GEO demo from scratch on a GitHub-hosted runner, checks that searches use
+# lexical retrieval, vector retrieval, and reranking, and records time, memory, and disk use.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/docker-demo-geo.yml"
+      - "apps/api/**"
+      - "apps/workers/**"
+      - "apps/web/**"
+      - "infra/**"
+      - "scripts/docker-package.sh"
+      - "Makefile"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/docker-demo-geo.yml"
+      - "apps/api/**"
+      - "apps/workers/**"
+      - "apps/web/**"
+      - "infra/**"
+      - "scripts/docker-package.sh"
+      - "Makefile"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-demo-geo-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  geo-demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Free runner disk space for images and models
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Prepare disposable local configuration
+        shell: bash
+        run: |
+          cp infra/compose/.env.example infra/compose/.env
+          postgres_password=$(openssl rand -hex 32)
+          app_password=$(openssl rand -hex 32)
+          sed -i "s/replace-with-a-long-random-value/${postgres_password}/" infra/compose/.env
+          sed -i "s/replace-with-another-long-random-value/${app_password}/" infra/compose/.env
+
+      - name: Validate Compose profiles
+        run: make docker-validate
+
+      - name: Build, load, and start the GEO demo
+        shell: bash
+        run: |
+          set -o pipefail
+          df -B1G --output=avail / | tail -1 > /tmp/disk-before-gib
+          # Sample container memory every 10 s while the demo is set up and searched.
+          ( while true; do
+              docker stats --no-stream --format '{{.Name}},{{.MemUsage}}' >> /tmp/omicsplorer-mem.csv 2>/dev/null
+              sleep 10
+            done ) &
+          echo $! > /tmp/mem-sampler.pid
+          start=$SECONDS
+          status=0
+          make docker-demo-geo 2>&1 | tee /tmp/omicsplorer-demo-geo.log || status=$?
+          {
+            echo "## GEO demo resources"
+            echo
+            echo "Runner: $(nproc) vCPU, $(free -g | awk '/Mem:/ {print $2}') GiB RAM, $(lscpu | sed -n 's/^Model name: *//p' | head -1)"
+            echo
+            echo "- \`make docker-demo-geo\` from a clean runner: $(( SECONDS - start )) s"
+            echo "- free disk before: $(cat /tmp/disk-before-gib) GiB; after: $(df -B1G --output=avail / | tail -1) GiB"
+            echo
+            echo "### Steps"
+            echo
+            echo '```text'
+            grep -E '^==> |^    done in |^First search:' /tmp/omicsplorer-demo-geo.log || true
+            echo '```'
+            echo
+            echo "make exit status: ${status}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "${status}"
+
+      - name: Verify the hybrid search path on real GEO records
+        shell: bash
+        run: |
+          curl --fail --silent --show-error \
+            --retry 20 --retry-delay 3 --retry-all-errors \
+            http://127.0.0.1:8000/api/v1/health > /dev/null
+          curl --fail --silent --show-error \
+            --retry 20 --retry-delay 3 --retry-all-errors \
+            http://127.0.0.1:3000/ > /dev/null
+
+          docker compose --env-file infra/compose/.env \
+            -f infra/compose/docker-compose.yml exec -T postgres \
+            psql -U genofinder -d genofinder -Atc \
+            "SELECT id FROM datasets WHERE raw_metadata->>'demo_profile' = 'geo-v1'" \
+            > /tmp/postgres-ids.txt
+          python3 - <<'PY'
+          import json
+          import urllib.request
+          from pathlib import Path
+
+          def post(url, body):
+              request = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                               headers={"Content-Type": "application/json"})
+              return json.load(urllib.request.urlopen(request, timeout=120))
+
+          postgres = {line.strip() for line in Path("/tmp/postgres-ids.txt").read_text().splitlines() if line.strip()}
+          qdrant, offset = set(), None
+          while True:
+              body = {"limit": 1000, "with_payload": False, "with_vector": False}
+              if offset is not None:
+                  body["offset"] = offset
+              result = post("http://127.0.0.1:6333/collections/datasets_v2/points/scroll", body)["result"]
+              qdrant.update(str(point["id"]) for point in result["points"])
+              offset = result.get("next_page_offset")
+              if offset is None:
+                  break
+          hits = post("http://127.0.0.1:9200/datasets_v2/_search",
+                      {"size": 10000, "_source": ["dataset_id"], "query": {"match_all": {}}})["hits"]["hits"]
+          opensearch = {hit["_source"]["dataset_id"] for hit in hits}
+          print(f"Loaded demo records: PostgreSQL {len(postgres)}, Qdrant {len(qdrant)}, OpenSearch {len(opensearch)}")
+          # The loader stops before writing when more than 25 of the 5,000 records (its default
+          # --max-missing) cannot be loaded, so a successful load has at least 4,975 rows.
+          assert len(postgres) >= 5000 - 25, len(postgres)
+          assert postgres == qdrant == opensearch, "PostgreSQL, Qdrant, and OpenSearch ID sets differ"
+          PY
+
+          python3 - <<'PY'
+          import json
+          import os
+          import statistics
+          import time
+          import urllib.request
+
+          def search(body):
+              request = urllib.request.Request(
+                  "http://127.0.0.1:8000/api/v1/search",
+                  data=json.dumps(body).encode(),
+                  headers={"Content-Type": "application/json", "X-Eval-Mode": "1"},
+              )
+              started = time.monotonic()
+              # CPU-only search time varies about tenfold between runners of the same size.
+              payload = json.load(urllib.request.urlopen(request, timeout=900))
+              return payload, time.monotonic() - started
+
+          # One query with and without the GEO filter checks the path; speed is recorded, not tested.
+          queries = ["Single-cell RNA sequencing of Alzheimer's disease microglia"]
+          seconds = []
+          for query in queries:
+              for body in ({"query_text": query, "page_size": 10},
+                           {"query_text": query, "page_size": 10, "source_db": ["GEO"]}):
+                  payload, elapsed = search(body)
+                  seconds.append(elapsed)
+                  trace = payload["evaluation_trace"]
+                  components = trace["components"]
+                  counts = trace["candidate_counts"]
+                  results = payload["results"]
+                  with_lexical = sum(1 for item in results
+                                     if item["score_breakdown"].get("lexical") is not None)
+                  print(f"{elapsed:6.1f}s {trace['effective_mode']} candidates lexical={counts['lexical']} "
+                        f"dense={counts['dense']} lexical-scored {with_lexical}/{len(results)} "
+                        f"filter={body.get('source_db')} {query[:50]}", flush=True)
+                  assert trace["effective_mode"] == "rrf_rerank", trace
+                  assert components["lexical"] == components["dense"] == components["reranker"] == "used", trace
+                  # "used" only means the call succeeded; both retrievers must also contribute.
+                  assert counts["lexical"] > 0 and counts["dense"] > 0, trace
+                  assert len(results) == 10, len(results)
+                  assert with_lexical > 0, results
+
+          line = (f"- {len(seconds)} verification searches after the first search: median "
+                  f"{statistics.median(seconds):.1f} s, max {max(seconds):.1f} s (CPU only)")
+          print(line)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(f"\n{line}\n")
+          PY
+
+      - name: Record memory and disk use
+        if: always()
+        shell: bash
+        run: |
+          kill "$(cat /tmp/mem-sampler.pid 2>/dev/null)" 2>/dev/null || true
+          python3 - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import collections
+          import re
+          from pathlib import Path
+
+          units = {"B": 1 / 2**30, "KiB": 1 / 2**20, "MiB": 1 / 2**10, "GiB": 1.0, "TiB": 2**10}
+          peak = collections.defaultdict(float)
+          path = Path("/tmp/omicsplorer-mem.csv")
+          lines = path.read_text().splitlines() if path.exists() else []
+          for line in lines:
+              name, _, usage = line.partition(",")
+              match = re.match(r"([0-9.]+)\s*([KMGT]?i?B)", usage.strip())
+              if not match:
+                  continue
+              gib = float(match.group(1)) * units.get(match.group(2), 0.0)
+              peak[name] = max(peak[name], gib)
+          print("\n### Peak container memory (10 s samples)\n")
+          print("| Container | Peak GiB |")
+          print("|---|---:|")
+          for name, value in sorted(peak.items(), key=lambda item: -item[1]):
+              print(f"| {name} | {value:.2f} |")
+          print(f"| sum of per-container peaks | {sum(peak.values()):.2f} |")
+          PY
+          {
+            echo
+            echo "### Host memory and swap at the end"
+            echo
+            echo '```text'
+            free -m
+            grep -E '^(pswpin|pswpout) ' /proc/vmstat
+            echo '```'
+            echo
+            echo "### Docker disk use"
+            echo
+            echo '```text'
+            docker system df
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Show container logs after failure
+        if: failure() || cancelled()
+        run: |
+          tail -n 120 /tmp/omicsplorer-demo-geo.log || true
+          docker compose --env-file infra/compose/.env \
+            -f infra/compose/docker-compose.yml ps
+          docker compose --env-file infra/compose/.env \
+            -f infra/compose/docker-compose.yml logs --no-color --tail=200
+
+      - name: Stop the demo
+        if: always()
+        run: make down
